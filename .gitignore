@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Ignore that specific problematic file
+Ml_Stats_jupiter.ipynb
