@@ -27,7 +27,7 @@ TIMEOUT_S = 30
 AGENT_NAME = "ios-risk-agent"
 FETCH_TYPE = "html"
 
-START_URL = "https://support.apple.com/en-us/121161"
+START_URL = "https://support.apple.com/en-us/123075"
 
 # Stage limits (keep small for dry run)
 TOP_LEVEL_MAX_LINKS = 30      # max links taken from 121161

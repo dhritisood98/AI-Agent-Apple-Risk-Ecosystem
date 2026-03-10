@@ -1,0 +1,5 @@
+{
+  "file_role": "Harvester",
+  "content_summary": "This file provides a harvester for collecting hardware information from an iOS device. It defines a protocol `HardwareInfoHarvesting` that outlines the properties to be harvested, including device name, type, model, display resolution, scale, CPU count, memory size, and kernel hostname. The `HardwareInfoHarvester` struct implements this protocol, using various iOS frameworks and libraries to gather the required information.",
+  "fingerprint_contribution": "This harvester contributes to the final device fingerprint by providing a set of unique hardware characteristics that can be used to identify and distinguish the device. The collected information can be used to generate a device fingerprint that is resistant to spoofing and can be used for various purposes such as device identification, tracking, and security."
+}

@@ -1,0 +1,5 @@
+{
+  "file_role": "DataProvider",
+  "content_summary": "This file contains several extensions to different harvesters (AppInfoHarvester, HardwareInfoHarvester, IdentifierHarvester, OSInfoHarvester, CellularNetworkInfoHarvester, LocalAuthenticationInfoHarvester) that implement the DeviceInfoTreeProvider protocol. Each harvester provides a list of annotated items that contain device information. The annotated items are filtered based on the configuration and stability level.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing various device information such as app info, hardware info, identifiers, OS info, cellular network info, and local authentication info. The information is categorized and filtered based on the configuration and stability level, and is used to build a tree-like structure that represents the device's characteristics."
+}

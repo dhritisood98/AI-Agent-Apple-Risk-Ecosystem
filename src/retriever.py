@@ -1,8 +1,7 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from supabase import create_client
 
-from .embedders import EmbedderSpec
 
 class Retriever:
     def __init__(self, supabase_url: str, supabase_key: str):
@@ -10,18 +9,18 @@ class Retriever:
 
     def retrieve(
         self,
-        spec: EmbedderSpec,
         query_embedding: List[float],
         k: int = 5,
     ) -> List[Dict[str, Any]]:
-        # For 384 RPC: expects (query_embedding, match_count)
-        if spec.dim == 384:
-            resp = self.sb.rpc(spec.rpc, {"query_embedding": query_embedding, "match_count": k}).execute()
-            return resp.data or []
 
-        # For 768 RPC: expects (query_embedding, match_count, filter_model)
-        resp = self.sb.rpc(
-            spec.rpc,
-            {"query_embedding": query_embedding, "match_count": k, "filter_model": spec.model_name},
-        ).execute()
-        return resp.data or []
+        rpc_params = {
+            "query_embedding": query_embedding,
+            "match_count": k
+        }
+
+        try:
+            resp = self.sb.rpc("match_chunks_384", rpc_params).execute()
+            return resp.data or []
+        except Exception as e:
+            print(f"❌ Retrieval Error: {e}")
+            return []

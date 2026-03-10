@@ -1,28 +1,21 @@
-def build_prompt(query, context):
-    """
-    Constructs a structured prompt for the AI Sentinel to analyze 
-    platform changes against device fingerprinting signals.
-    """
-    return f"""
-    SYSTEM: You are the 'AI Sentinel,' a specialized Digital Fraud Research Assistant. 
-    Your goal is to analyze Apple/iOS platform changes and predict their impact on 
-    device intelligence and fingerprinting signals.
+def build_prompt(query, results, system_instructions=""):
+    prompt = ""
 
-    CONTEXT FROM KNOWLEDGE BASE:
-    {context}
+    if system_instructions:
+        prompt += system_instructions.strip() + "\n\n"
 
-    USER QUERY / PLATFORM UPDATE:
-    {query}
+    prompt += f"User Query:\n{query}\n\n"
+    prompt += "Retrieved Context:\n"
 
-    INSTRUCTIONS:
-    1. Identify which specific device signals or APIs (from the context) are affected.
-    2. Determine if this change increases 'Entropy' or 'Privacy'.
-    3. Provide a 'Fraud Risk Rating' (Low, Medium, High).
-    4. Suggest a technical mitigation.
+    if not results:
+        prompt += "No relevant context retrieved.\n"
+        return prompt
 
-    RESPONSE FORMAT:
-    - Summary of Impact:
-    - Affected Modules:
-    - Fraud Risk Assessment:
-    - Recommendations:
-    """
+    for i, res in enumerate(results, start=1):
+        prompt += f"\nContext {i}:\n"
+        prompt += f"- Chunk ID: {res.get('snapshot_chunk_id', 'unknown')}\n"
+        prompt += f"- Similarity: {res.get('similarity', 0):.3f}\n"
+        prompt += f"- Text: {res.get('chunk_text', '')}\n"
+
+    prompt += "\nPlease answer using the retrieved context when possible."
+    return prompt

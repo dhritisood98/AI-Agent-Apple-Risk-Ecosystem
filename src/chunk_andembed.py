@@ -1,51 +1,84 @@
 from .db import get_supabase_client
-from .config import settings
-from .processor.chunker import IOSDocumentChunker
 from .embedders import Embedder, get_embedder_spec
+
 
 def main():
     sb = get_supabase_client()
-    
-    # 1. Initialize Chunker and Embedder (using bge_small as per your runner)
-    chunker = IOSDocumentChunker(chunk_size=1000, chunk_overlap=150)
+
     spec = get_embedder_spec("bge_small")
     embedder = Embedder(spec)
 
-    # 2. Fetch snapshots that need processing
-    print("Fetching raw snapshots...")
-    # Adjust 'snapshots' to whatever your table name is
-    snapshots = sb.table("snapshots").select("*").eq("agent_name", "ios-risk-agent").execute().data
+    print("Fetching snapshot chunks from Supabase...")
 
-    for snap in snapshots:
-        print(f"Processing: {snap['url']}")
-        
-        # Prepare metadata for context injection
-        metadata = {
-            "source_url": snap['url'],
-            "doc_id": snap['id'],
-            "version": "iOS 18" # You can add logic to parse this from the URL
-        }
+    response = (
+        sb.table("snapshot_chunks")
+        .select("id, snapshot_id, chunk_index, chunk_text")
+        .execute()
+    )
+    chunks = response.data
 
-        # 3. Chunk the document
-        chunks = chunker.chunk_document(snap['content'], metadata)
+    if not chunks:
+        print("❓ No rows found in snapshot_chunks.")
+        return
 
-        # 4. Embed and Upload
-        for chunk in chunks:
-            # Generate vector using your embedder.py logic
-            vector = embedder.embed_query(chunk['content'])
-            
+    print(f"📋 Found {len(chunks)} chunks. Starting embedding...")
+
+    inserted_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for chunk in chunks:
+        chunk_id = chunk.get("id")
+        snapshot_id = chunk.get("snapshot_id")
+        chunk_index = chunk.get("chunk_index")
+        text = chunk.get("chunk_text")
+
+        if not text:
+            print(f"⚠️ Skipping chunk {chunk_id} - No chunk_text found.")
+            skipped_count += 1
+            continue
+
+        print(
+            f"🚀 Processing chunk_id={chunk_id} | "
+            f"snapshot_id={snapshot_id} | chunk_index={chunk_index}"
+        )
+
+        try:
+            existing = (
+                sb.table(spec.table)
+                .select("snapshot_chunk_id")
+                .eq("snapshot_chunk_id", chunk_id)
+                .limit(1)
+                .execute()
+            )
+
+            if existing.data:
+                print(f"⏭️ Skipping chunk {chunk_id} - already embedded.")
+                skipped_count += 1
+                continue
+
+            vector = embedder.embed_query(text)
+
             payload = {
-                "agent_name": "ios-risk-agent",
-                "content": chunk['content'],
-                "metadata": chunk['metadata'],
+                "snapshot_chunk_id": chunk_id,
                 "embedding": vector,
-                "source_id": snap['id']
+                "model_name": "bge-small-en-v1.5",
+                "agent_name": "ios-risk-agent",
             }
-            
-            # Upsert into the table defined in your EmbedderSpec
-            sb.table(spec.table).upsert(payload).execute()
-        
-    print(f"✅ Finished processing {len(snapshots)} documents.")
+
+            sb.table(spec.table).insert(payload).execute()
+            inserted_count += 1
+
+        except Exception as e:
+            print(f"❌ Error processing chunk {chunk_id}: {e}")
+            error_count += 1
+
+    print("\n✅ Embedding run complete.")
+    print(f"Inserted: {inserted_count}")
+    print(f"Skipped: {skipped_count}")
+    print(f"Errors: {error_count}")
+    print(f"Total checked: {len(chunks)}")
+
 
 if __name__ == "__main__":
     main()

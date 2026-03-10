@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides an extension to the UIDevice class to conform to the DeviceIdentificationInfoProviding protocol. The protocol requires two properties: model and userAssignedName. The model property is not implemented in this file, but the userAssignedName property is implemented to return the device name. However, if the iOS or tvOS version is 16.0 or later, an empty string is returned for userAssignedName.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the device's model and user-assigned name. The model information can be used to identify the device type, while the user-assigned name can be used to identify the device uniquely. However, in iOS 16.0 and later, the user-assigned name is not available due to privacy restrictions, which reduces the uniqueness of the device fingerprint."
+}

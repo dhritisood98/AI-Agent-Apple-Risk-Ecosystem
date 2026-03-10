@@ -1,0 +1,5 @@
+{
+  "file_role": "Hashing Logic",
+  "content_summary": "This file contains a Swift class called FingerprintTreeCalculator. It has a single method calculateFingerprints which recursively calculates fingerprints for a tree-like structure of DeviceInfoItem objects. The method uses a provided hash function to calculate the fingerprint of each node's children and combines them to create a fingerprint for the current node.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by recursively calculating and combining fingerprints for each node in the device information tree. The calculated fingerprints are then used to create a unique identifier for the device."
+}

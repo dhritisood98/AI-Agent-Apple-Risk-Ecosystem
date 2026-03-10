@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides information about the device's local authentication settings. It uses the LocalAuthentication framework to determine if a passcode is enabled, if biometrics are enabled, and the type of biometry supported (e.g., Face ID, Touch ID). The file defines a protocol `LocalAuthenticationInfoHarvesting` that specifies the properties that must be implemented by any type that conforms to it. The `LocalAuthenticationInfoHarvester` struct implements this protocol and provides the actual implementation for retrieving the local authentication information.",
+  "fingerprint_contribution": "The information provided by this file contributes to the device fingerprint by adding details about the device's security settings. Specifically, it adds information about the presence and type of biometric authentication, which can be used to differentiate between devices. This information can be used in conjunction with other device attributes to create a unique fingerprint for the device."
+}

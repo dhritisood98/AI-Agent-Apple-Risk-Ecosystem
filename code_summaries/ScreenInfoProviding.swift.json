@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file extends the UIScreen class to conform to the ScreenInfoProviding protocol, allowing it to provide native screen bounds and scale information. This protocol defines two properties: nativeBounds and nativeScale, which are used to retrieve the screen's dimensions and scaling factor.",
+  "fingerprint_contribution": "This file contributes to the device fingerprint by providing information about the screen's dimensions and scaling factor. This information can be used to identify the device type, screen resolution, and other characteristics that can be used to uniquely identify the device."
+}
