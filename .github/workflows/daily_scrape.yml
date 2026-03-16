@@ -1,0 +1,33 @@
+name: Daily Apple Risk Scrape
+
+on:
+  schedule:
+    # 13:00 UTC is 8:00 AM CST (Chicago time)
+    - cron: '0 13 * * *'
+  workflow_dispatch: # This lets you click a button to run it manually
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ui-initial-draft # Targets your current working branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install supabase requests beautifulsoup4 
+          # Add any other libraries your script needs here
+
+      - name: Run Sync Script
+        env:
+          # These pull from your GitHub Secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python sync_to_supabase.py
