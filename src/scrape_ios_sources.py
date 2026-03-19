@@ -1,6 +1,6 @@
 # src/scrape_ios_sources.py
 # iOS-only scraper: pulls sources where agent_name == "ios-risk-agent"
-# Stores snapshots (same schema) so you can verify cleaning + storage
+# Records changes ONLY if content_hash differs from the last stored version.
 
 import hashlib
 import re
@@ -113,19 +113,39 @@ def main():
             print(f"Skipped (too short): {name} len={len(clean_text)}", flush=True)
             continue
 
+        # --- GATEKEEPER LOGIC START ---
+        new_hash = _sha256(clean_text)
+
+        # Check Supabase for the last recorded hash for this specific source
+        last_entry = (
+            sb.table("snapshots")
+            .select("content_hash")
+            .eq("source_id", src_id)
+            .order("fetched_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        # Compare the hashes
+        if last_entry.data and last_entry.data[0].get("content_hash") == new_hash:
+            skipped += 1
+            print(f"⏭️ No change detected for: {name}. Skipping database entry.", flush=True)
+            continue
+        # --- GATEKEEPER LOGIC END ---
+
         payload = {
             "source_id": src_id,
             "fetched_at": now,
-            "content_hash": _sha256(clean_text),
+            "content_hash": new_hash,
             "raw_text": raw_html,
             "clean_text": clean_text,
         }
 
         sb.table("snapshots").insert(payload).execute()
         inserted += 1
-        print(f"Stored iOS snapshot: {name}", flush=True)
+        print(f"✅ Stored NEW iOS snapshot: {name}", flush=True)
 
-    print(f"✅ Done. inserted={inserted} skipped={skipped} failed={failed}", flush=True)
+    print(f"🏁 Done. inserted={inserted} skipped={skipped} failed={failed}", flush=True)
 
 
 if __name__ == "__main__":
