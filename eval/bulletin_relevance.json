@@ -1,0 +1,145 @@
+[
+  {
+    "swift_file": "OSInfoHarvester.swift",
+    "description": "Harvests OS version, kernel version, boot time, timezone via sysctl",
+    "relevant_keywords": [
+      "os version", "kernel", "sysctl", "boot", "timezone", "system version",
+      "operating system", "ios version", "macos", "release"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "carplay", "arkit", "healthkit", "gamekit"
+    ]
+  },
+  {
+    "swift_file": "IdentifierHarvester.swift",
+    "description": "Retrieves identifierForVendor (IDFV) and stores it in Keychain",
+    "relevant_keywords": [
+      "identifierforvendor", "vendor identifier", "idfv", "uidevice", "identifier",
+      "privacy", "tracking", "uuid", "advertising identifier", "idfa"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "carplay", "arkit", "gamekit", "kernel"
+    ]
+  },
+  {
+    "swift_file": "CellularNetworkInfoHarvester.swift",
+    "description": "Reads carrier info, MCC, MNC, radio technology via CTTelephonyNetworkInfo",
+    "relevant_keywords": [
+      "coretelephony", "carrier", "cellular", "mcc", "mnc", "network",
+      "cttelephony", "radio", "sim", "mobile network", "telephony"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "biometrics", "arkit", "healthkit", "sysctl"
+    ]
+  },
+  {
+    "swift_file": "LocalAuthenticationInfoHarvester.swift",
+    "description": "Checks biometrics availability, passcode state via LAContext",
+    "relevant_keywords": [
+      "biometrics", "face id", "touch id", "passcode", "lacontext",
+      "local authentication", "biometric", "authentication", "privacy"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "cellular", "arkit", "gamekit", "sysctl"
+    ]
+  },
+  {
+    "swift_file": "HardwareInfoHarvester.swift",
+    "description": "Reads device name, model, CPU count, memory, screen size via UIDevice and sysctl",
+    "relevant_keywords": [
+      "device", "hardware", "cpu", "memory", "screen", "sysctl", "uidevice",
+      "model identifier", "processor", "resolution", "display"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "carplay", "healthkit", "gamekit", "carrier"
+    ]
+  },
+  {
+    "swift_file": "KeychainIdentifierStorage.swift",
+    "description": "Stores and retrieves UUIDs in the iOS Keychain using SecItem APIs",
+    "relevant_keywords": [
+      "keychain", "secitem", "kSecClass", "kSecAttr", "keychain access",
+      "security", "data protection", "entitlement", "keychain sharing"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "cellular", "sysctl", "arkit", "biometrics"
+    ]
+  },
+  {
+    "swift_file": "SHA256FingerprintFunction.swift",
+    "description": "Computes SHA-256 hash using CryptoKit (iOS 13+) or CommonCrypto fallback",
+    "relevant_keywords": [
+      "sha256", "sha-256", "cryptokit", "commoncrypto", "hash", "digest",
+      "cryptography", "hashing", "security framework"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "cellular", "sysctl", "biometrics", "carrier"
+    ]
+  },
+  {
+    "swift_file": "AppInfoHarvester.swift",
+    "description": "Harvests locale, language, UI style (dark/light mode) from app context",
+    "relevant_keywords": [
+      "locale", "language", "region", "user interface", "dark mode",
+      "ui style", "accessibility", "internationalization", "localization"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "cellular", "sha256", "sysctl", "biometrics"
+    ]
+  },
+  {
+    "swift_file": "FingerprintTreeCalculator.swift",
+    "description": "Combines all harvested signals into a stable fingerprint tree and hash",
+    "relevant_keywords": [
+      "fingerprint", "device fingerprint", "privacy", "tracking", "identifier",
+      "signal", "aggregat", "entropy", "fingerprinting"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "sha256 specific", "cellular specific", "gamekit"
+    ]
+  },
+  {
+    "swift_file": "DeviceInfoProvider.swift",
+    "description": "Main public API entry point: computes and returns device fingerprint",
+    "relevant_keywords": [
+      "fingerprint", "device identifier", "privacy", "tracking", "api",
+      "fingerprinting", "device info", "signal collection"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "carplay", "arkit", "gamekit"
+    ]
+  },
+  {
+    "swift_file": "HardwareSubsystem.swift",
+    "description": "Reads hardware model and memory size via sysctl hw.* namespace",
+    "relevant_keywords": [
+      "sysctl", "hardware", "hw.machine", "hw.memsize", "hw.model",
+      "system control", "kernel", "low-level"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "biometrics", "cellular", "locale", "sha256"
+    ]
+  },
+  {
+    "swift_file": "KernelSubsystem.swift",
+    "description": "Reads kernel version, OS type, OS release via sysctl kern.* namespace",
+    "relevant_keywords": [
+      "sysctl", "kernel", "kern.version", "kern.ostype", "os release",
+      "kern.osversion", "system control"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "biometrics", "cellular", "locale", "sha256"
+    ]
+  },
+  {
+    "swift_file": "VirtualMemorySubsystem.swift",
+    "description": "Reads virtual memory page size via sysctl vm.* namespace",
+    "relevant_keywords": [
+      "sysctl", "virtual memory", "page size", "memory", "vm.pagesize",
+      "system control", "kernel"
+    ],
+    "irrelevant_keywords": [
+      "apple pay", "homekit", "biometrics", "cellular", "locale", "sha256"
+    ]
+  }
+]

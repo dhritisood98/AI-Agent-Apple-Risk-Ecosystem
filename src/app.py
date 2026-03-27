@@ -6,6 +6,12 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from supabase import create_client
 from src.config import settings
+from src.zero_shot import classify_risk_zs, classify_risk_zs_with_scores
+from src.embedders import get_embedder_spec, Embedder
+from src.retriever import Retriever
+from src.similarity import rerank_by_cosine
+from src.llm_clients import NIMClient, NoLLM
+from src.prompts import build_prompt
 
 
 st.set_page_config(
@@ -136,16 +142,6 @@ hr.div { border: none; border-top: 1px solid #f3f4f6; margin: 1.4rem 0; }
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-def classify_risk(text: str) -> tuple[str, str, str]:
-    t = (text or "").lower()
-    if any(x in t for x in ["kernel","boot time","biometrics","local authentication",
-                              "critical","blocked","degraded","high risk","tracking",
-                              "sensitive information","device fingerprinting"]):
-        return "High", "Signal Degradation", "Likely exposed to Apple privacy restrictions or reliability changes."
-    if any(x in t for x in ["identifierforvendor","moderate","api change","limited",
-                              "partial","network","less reliable"]):
-        return "Medium", "API Dependency", "Depends on APIs that may remain available but could change in behavior."
-    return "Low", "Operational", "Lower sensitivity; less immediate disruption risk."
 
 def signal_category(text: str) -> str:
     t = (text or "").lower()
@@ -155,10 +151,20 @@ def signal_category(text: str) -> str:
         return "Identifiers"
     if any(x in t for x in ["device name","device type","memory","cpu","screen resolution"]):
         return "Device Attributes"
-    if any(x in t for x in ["biometrics","passcode","authentication"]):
+    if any(x in t for x in ["biometrics","passcode","authentication","local authentication"]):
         return "Authentication"
-    if any(x in t for x in ["locale","user interface style"]):
+    if any(x in t for x in ["locale","user interface style","ui style","language","region"]):
         return "Locale / UI"
+    if any(x in t for x in ["cellular","carrier","network","reachability","mobile data","sim"]):
+        return "Network / Cellular"
+    if any(x in t for x in ["keychain","disk space","disk","storage","identifier storage"]):
+        return "Storage / Keychain"
+    if any(x in t for x in ["sha256","sha-256","hash","digest","fingerprint function","checksum"]):
+        return "Hashing"
+    if any(x in t for x in ["fingerprint tree","compound","tree builder","tree calculator","stability level","compound tree"]):
+        return "Fingerprint Core"
+    if any(x in t for x in ["configuration","factory","builder","provider","aggregat","library","coordinator"]):
+        return "App Infrastructure"
     return "Other"
 
 def shorten(path: str) -> str:
@@ -183,6 +189,65 @@ PLOTLY_BASE = dict(
 @st.cache_resource
 def get_supabase():
     return create_client(settings.supabase_url, settings.supabase_key)
+
+@st.cache_resource
+def get_embedder():
+    spec = get_embedder_spec("nomic_768")
+    return Embedder(spec)
+
+@st.cache_resource
+def get_retriever():
+    return Retriever(settings.supabase_url, settings.supabase_key)
+
+@st.cache_resource
+def get_llm():
+    if settings.nvidia_api_key:
+        return NIMClient(settings.nvidia_api_key, settings.nim_base_url)
+    return NoLLM()
+
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+@st.cache_data(ttl=3600)
+def get_raw_source(file_path: str, max_lines: int = 40) -> str:
+    """Read the raw Swift source file from the local repo."""
+    abs_path = os.path.join(_BASE_DIR, file_path)
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()[:max_lines]
+        return "".join(lines)
+    except FileNotFoundError:
+        return f"(source file not found: {file_path})"
+
+@st.cache_data(ttl=300)
+def get_related_bulletins(content: str, k: int = 3) -> list:
+    """Embed the file summary with bge_small and retrieve related Apple bulletin chunks.
+
+    Bulletins are indexed via chunk_andembed.py using bge_small (384-dim) into
+    vector_chunks_384, so the query vector must use the same model.
+    """
+    embedder = get_embedder()
+    retriever = get_retriever()
+    vec = embedder.embed_query(content)
+    results = retriever.retrieve_with_rpc("match_chunks_768", vec, k=k * 3)
+    from src.similarity import rerank_by_cosine
+    return rerank_by_cosine(vec, results)[:k]
+
+@st.cache_data(ttl=3600)
+def load_chunk_source_map() -> dict:
+    """Returns {snapshot_chunk_id: source_url} by joining snapshot_chunks → snapshots → sources."""
+    sb = get_supabase()
+    rows = (
+        sb.table("snapshot_chunks")
+        .select("id, snapshots!inner(source_id, sources!inner(url))")
+        .execute()
+        .data or []
+    )
+    result = {}
+    for r in rows:
+        snap = r.get("snapshots") or {}
+        src = snap.get("sources") or {}
+        result[r["id"]] = src.get("url", "")
+    return result
 
 @st.cache_data(ttl=300)
 def load_code_knowledge():
@@ -224,28 +289,42 @@ with st.spinner("Loading data from Supabase…"):
     code_data = load_code_knowledge()
     CURRENT_IOS = load_stable_ios_version()
 
+BULLETIN_MIN_SIM = 0.55
+
 records = []
 for item in code_data:
-    lvl, rtype, reason = classify_risk(item.get("content", ""))
+    content = item.get("content", "")
+    lvl, rtype, reason, zs_scores = classify_risk_zs_with_scores(content)
+    # Compute effective risk: cross-reference bulletin coverage (cached after first run)
+    raw_buls = get_related_bulletins(content)
+    has_impact = any(
+        b.get("cosine_similarity", b.get("similarity", 0.0)) >= BULLETIN_MIN_SIM
+        for b in raw_buls
+    )
+    effective_risk = lvl if has_impact else "No Impact"
     records.append({
         "Swift File":      shorten(item.get("file_path", "")),
+        "file_path":       item.get("file_path", ""),
         "Feature":         item.get("feature", ""),
-        "Risk Level":      lvl,
+        "Risk Level":      lvl,            # intrinsic zero-shot sensitivity
+        "Effective Risk":  effective_risk, # bulletin-backed actual impact
         "Risk Type":       rtype,
         "Risk Reason":     reason,
-        "Signal Category": signal_category(item.get("content", "")),
-        "Summary":         item.get("content", ""),
+        "Signal Category": signal_category(content),
+        "Summary":         content,
+        "zs_scores":       zs_scores,
     })
 
 df = pd.DataFrame(records) if records else pd.DataFrame(
-    columns=["Swift File","Feature","Risk Level","Risk Type","Risk Reason","Signal Category","Summary"])
+    columns=["Swift File","Feature","Risk Level","Effective Risk","Risk Type","Risk Reason","Signal Category","Summary"])
 
-high_n   = int((df["Risk Level"]=="High").sum())   if not df.empty else 0
-medium_n = int((df["Risk Level"]=="Medium").sum()) if not df.empty else 0
-low_n    = int((df["Risk Level"]=="Low").sum())    if not df.empty else 0
-total_n  = len(df)
+high_n      = int((df["Effective Risk"]=="High").sum())      if not df.empty else 0
+medium_n    = int((df["Effective Risk"]=="Medium").sum())    if not df.empty else 0
+low_n       = int((df["Effective Risk"]=="Low").sum())       if not df.empty else 0
+no_impact_n = int((df["Effective Risk"]=="No Impact").sum()) if not df.empty else 0
+total_n     = len(df)
 
-# Weighted risk score 0–100
+# Weighted risk score 0–100 (No Impact counts as 0)
 risk_score = round((high_n * 100 + medium_n * 50 + low_n * 10) / max(total_n, 1))
 
 
@@ -270,9 +349,9 @@ c1, c2, c3, c4, c5 = st.columns(5)
 kpi_defs = [
     (c1, "kpi-blue",  "Stable iOS",       CURRENT_IOS,      "Latest monitored release",   None,                         "#2563eb"),
     (c2, "kpi-slate", "Beta Track",        BETA_IOS,         "Forward-looking changes",    None,                         "#64748b"),
-    (c3, "kpi-red",   "High-Risk Files",   str(high_n),      "Immediate attention needed", high_n / max(total_n, 1),    "#dc2626"),
-    (c4, "kpi-amber", "Medium-Risk Files", str(medium_n),    "Monitor for API drift",      medium_n / max(total_n, 1),  "#d97706"),
-    (c5, "kpi-green", "Stable Files",      str(low_n),       "No disruption expected",     low_n / max(total_n, 1),     "#16a34a"),
+    (c3, "kpi-red",   "High Impact",       str(high_n),      "Bulletin-confirmed risk",    high_n / max(total_n, 1),         "#dc2626"),
+    (c4, "kpi-amber", "Medium Impact",     str(medium_n),    "Monitor for API drift",      medium_n / max(total_n, 1),       "#d97706"),
+    (c5, "kpi-green", "No Impact",         str(no_impact_n), "No matching Apple bulletins", no_impact_n / max(total_n, 1),   "#6b7280"),
 ]
 for col, accent, label, value, sub, pct, bar_color in kpi_defs:
     bar_html = ""
@@ -381,19 +460,22 @@ tab1, tab2, tab3 = st.tabs(["Executive Overview", "AI Risk Analysis", "File Risk
 # TAB 1  ·  EXECUTIVE OVERVIEW
 # ─────────────────────────────────────────────────────────────────────────────
 with tab1:
+    if "t1_filter" not in st.session_state:
+        st.session_state.t1_filter = {"type": None, "risk": None, "category": None}
+
     left, right = st.columns([3, 2], gap="large")
 
     with left:
-        ch1, ch2 = st.columns(2)
+        _donut_col, _ = st.columns([1, 1])
 
         # ── Donut chart ───────────────────────────────────────────────────────
-        with ch1:
+        with _donut_col:
             st.markdown('<div class="sec">Risk Distribution</div>', unsafe_allow_html=True)
             donut = go.Figure(go.Pie(
-                labels=["High", "Medium", "Low"],
-                values=[high_n, medium_n, low_n],
+                labels=["High", "Medium", "Low", "No Impact"],
+                values=[high_n, medium_n, low_n, no_impact_n],
                 hole=0.62,
-                marker=dict(colors=["#dc2626","#d97706","#16a34a"],
+                marker=dict(colors=["#dc2626","#d97706","#16a34a","#d1d5db"],
                             line=dict(color="#ffffff", width=2)),
                 textinfo="percent",
                 textfont=dict(size=11, color="#ffffff", family="Inter"),
@@ -414,89 +496,62 @@ with tab1:
                 ),
                 height=240,
             )
-            st.plotly_chart(donut, use_container_width=True, config={"displayModeBar": False})
+            donut_ev = st.plotly_chart(donut, use_container_width=True, config={"displayModeBar": False}, on_select="rerun", key="donut_chart")
+            if donut_ev and donut_ev.selection.points:
+                lbl = donut_ev.selection.points[0].get("label")
+                if lbl:
+                    st.session_state.t1_filter = {"type": "risk", "risk": lbl, "category": None}
 
-        # ── Signal exposure bar chart ──────────────────────────────────────────
-        with ch2:
-            st.markdown('<div class="sec">Signal Exposure Areas</div>', unsafe_allow_html=True)
-            if not df.empty:
-                sig = df["Signal Category"].value_counts().reset_index()
-                sig.columns = ["Category", "Count"]
-                bar_colors = ["#dc2626" if c >= 3 else "#d97706" if c == 2 else "#16a34a" for c in sig["Count"]]
-                fig_bar = go.Figure(go.Bar(
-                    x=sig["Count"], y=sig["Category"],
-                    orientation="h",
-                    marker=dict(color=bar_colors, line=dict(width=0)),
-                    text=sig["Count"], textposition="outside",
-                    textfont=dict(size=11, color="#6b7280"),
-                    hovertemplate="<b>%{y}</b><br>%{x} files<extra></extra>",
-                ))
-                fig_bar.update_layout(
-                    **PLOTLY_BASE,
-                    xaxis=dict(visible=False),
-                    yaxis=dict(tickfont=dict(size=11, color="#374151")),
-                    height=240,
-                    bargap=0.35,
+        # ── Stacked bar: Risk breakdown per signal category (linked to donut) ──
+        _active_risk = (
+            st.session_state.t1_filter.get("risk")
+            if st.session_state.t1_filter.get("type") == "risk" else None
+        )
+        _stack_title = (
+            f'Risk Breakdown — <span style="color:{"#dc2626" if _active_risk=="High" else "#d97706" if _active_risk=="Medium" else "#16a34a"}">{_active_risk}</span> highlighted'
+            if _active_risk else "Risk Breakdown by Signal Category"
+        )
+        st.markdown(f'<div class="sec" style="margin-top:.5rem;">{_stack_title}</div>', unsafe_allow_html=True)
+        if not df.empty:
+            _cat_order = df["Signal Category"].value_counts().index.tolist()
+            _full_palette  = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a", "No Impact": "#d1d5db"}
+            _faded_palette = {"High": "#fca5a5", "Medium": "#fcd34d", "Low": "#86efac", "No Impact": "#f3f4f6"}
+            fig_stack = go.Figure()
+            for level in ["High", "Medium", "Low", "No Impact"]:
+                _counts = df[df["Effective Risk"] == level]["Signal Category"].value_counts()
+                _color = (
+                    _full_palette[level] if (not _active_risk or _active_risk == level)
+                    else _faded_palette[level]
                 )
-                st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
-
-        # ── Top files ranked bar ───────────────────────────────────────────────
-        st.markdown('<div class="sec" style="margin-top:.5rem;">Top Files by Risk Priority</div>', unsafe_allow_html=True)
-        if not df.empty:
-            risk_map = {"High": 3, "Medium": 2, "Low": 1}
-            ranked = df.copy()
-            ranked["Score"] = ranked["Risk Level"].map(risk_map)
-            ranked = ranked.sort_values("Score", ascending=True).tail(8)
-            rank_colors = [{"High":"#dc2626","Medium":"#d97706","Low":"#16a34a"}[r] for r in ranked["Risk Level"]]
-            fig_rank = go.Figure(go.Bar(
-                x=ranked["Score"], y=ranked["Swift File"],
-                orientation="h",
-                marker=dict(color=rank_colors, line=dict(width=0)),
-                text=ranked["Risk Level"], textposition="inside",
-                textfont=dict(size=10, color="#ffffff", family="Inter"),
-                hovertemplate="<b>%{y}</b><br>Risk: %{text}<extra></extra>",
-                width=0.52,
-            ))
-            fig_rank.update_layout(
+                fig_stack.add_trace(go.Bar(
+                    name=level,
+                    x=[_counts.get(cat, 0) for cat in _cat_order],
+                    y=_cat_order,
+                    orientation="h",
+                    marker=dict(color=_color, line=dict(width=0)),
+                    hovertemplate=f"<b>%{{y}}</b><br>{level}: %{{x}} file(s)<extra></extra>",
+                ))
+            fig_stack.update_layout(
                 **PLOTLY_BASE,
-                xaxis=dict(
-                    tickvals=[1, 2, 3], ticktext=["Low", "Medium", "High"],
-                    tickfont=dict(size=10, color="#9ca3af"),
-                    range=[0, 3.6],
-                ),
-                yaxis=dict(tickfont=dict(size=10, color="#374151")),
-                height=280,
-                bargap=0.3,
-            )
-            st.plotly_chart(fig_rank, use_container_width=True, config={"displayModeBar": False})
-
-        # ── Risk Heatmap: Signal Category × Risk Level ────────────────────────
-        st.markdown('<div class="sec" style="margin-top:.5rem;">Risk Heatmap — Category × Level</div>', unsafe_allow_html=True)
-        if not df.empty:
-            heat = df.groupby(["Signal Category", "Risk Level"]).size().reset_index(name="Count")
-            heat_pivot = heat.pivot(index="Signal Category", columns="Risk Level", values="Count").fillna(0)
-            for col_name in ["High", "Medium", "Low"]:
-                if col_name not in heat_pivot.columns:
-                    heat_pivot[col_name] = 0
-            heat_pivot = heat_pivot[["High", "Medium", "Low"]]
-            fig_heat = go.Figure(go.Heatmap(
-                z=heat_pivot.values,
-                x=heat_pivot.columns.tolist(),
-                y=heat_pivot.index.tolist(),
-                colorscale=[[0,"#f0fdf4"],[0.5,"#fef9c3"],[1,"#fef2f2"]],
-                text=heat_pivot.values.astype(int),
-                texttemplate="%{text}",
-                textfont=dict(size=13, color="#374151", family="Inter"),
-                showscale=False,
-                hovertemplate="<b>%{y}</b> — <b>%{x}</b><br>%{z} file(s)<extra></extra>",
-            ))
-            fig_heat.update_layout(
-                **PLOTLY_BASE,
-                xaxis=dict(tickfont=dict(size=11, color="#374151"), side="top"),
+                barmode="stack",
+                xaxis=dict(visible=False),
                 yaxis=dict(tickfont=dict(size=11, color="#374151")),
-                height=220,
+                height=320,
+                bargap=0.3,
+                legend=dict(
+                    orientation="h", x=0.5, xanchor="center", y=-0.04,
+                    font=dict(size=11, color="#374151"),
+                ),
+                showlegend=True,
             )
-            st.plotly_chart(fig_heat, use_container_width=True, config={"displayModeBar": False})
+            stack_ev = st.plotly_chart(fig_stack, use_container_width=True, config={"displayModeBar": False}, on_select="rerun", key="stack_chart")
+            if stack_ev and stack_ev.selection.points:
+                pt = stack_ev.selection.points[0]
+                cat_val = pt.get("y")
+                trace_idx = pt.get("curveNumber", 0)
+                risk_val = ["High", "Medium", "Low", "No Impact"][trace_idx]
+                if cat_val:
+                    st.session_state.t1_filter = {"type": "both", "risk": risk_val, "category": cat_val}
 
     # ── Right column ──────────────────────────────────────────────────────────
     with right:
@@ -524,7 +579,7 @@ with tab1:
             </div>""", unsafe_allow_html=True)
 
         st.markdown('<div class="sec" style="margin-top:.9rem;">Priority Files</div>', unsafe_allow_html=True)
-        for row in [r for r in records if r["Risk Level"]=="High"][:3]:
+        for row in [r for r in records if r["Effective Risk"]=="High"][:3]:
             st.markdown(f"""
             <div class="{fc_cls(row['Risk Level'])}">
                 {rb_html(row['Risk Level'])}
@@ -532,6 +587,54 @@ with tab1:
                 <div class="fc-meta">{row['Feature']} · {row['Risk Type']}</div>
                 <div class="fc-body">{row['Summary'][:140]}…</div>
             </div>""", unsafe_allow_html=True)
+
+    # ── Drill-down panel (shown when a chart element is clicked) ──────────────
+    f = st.session_state.t1_filter
+    if f["type"]:
+        st.markdown("<hr style='border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0 1rem 0;'>", unsafe_allow_html=True)
+
+        if f["type"] == "risk":
+            filtered = [r for r in records if r["Effective Risk"] == f["risk"]]
+            title = f"{f['risk']} Files"
+            badge_color = {"High": "#fef2f2", "Medium": "#fffbeb", "Low": "#f0fdf4", "No Impact": "#f9fafb"}.get(f["risk"], "#f9fafb")
+        elif f["type"] == "category":
+            filtered = [r for r in records if r["Signal Category"] == f["category"]]
+            title = f"{f['category']} — All Files"
+            badge_color = "#eff6ff"
+        elif f["type"] == "both":
+            filtered = [r for r in records if r["Signal Category"] == f["category"] and r["Effective Risk"] == f["risk"]]
+            title = f"{f['category']}  ·  {f['risk']}"
+            badge_color = {"High": "#fef2f2", "Medium": "#fffbeb", "Low": "#f0fdf4", "No Impact": "#f9fafb"}.get(f["risk"], "#f9fafb")
+        elif f["type"] == "file":
+            filtered = [r for r in records if r["Swift File"] == f.get("file")]
+            title = f["file"]
+            badge_color = "#f9fafb"
+        else:
+            filtered = []
+            title = ""
+            badge_color = "#f9fafb"
+
+        hd_col, btn_col = st.columns([5, 1])
+        with hd_col:
+            st.markdown(f'<div class="sec">{title} <span style="font-size:.78rem;font-weight:400;color:#6b7280;">— {len(filtered)} file(s)</span></div>', unsafe_allow_html=True)
+        with btn_col:
+            if st.button("✕ Clear", key="t1_clear"):
+                st.session_state.t1_filter = {"type": None, "risk": None, "category": None}
+                st.rerun()
+
+        if filtered:
+            dc1, dc2 = st.columns(2)
+            for i, row in enumerate(filtered):
+                with (dc1 if i % 2 == 0 else dc2):
+                    st.markdown(f"""
+                    <div class="{fc_cls(row['Risk Level'])}" style="background:{badge_color};">
+                        {rb_html(row['Risk Level'])}
+                        <div class="fc-name" style="margin-top:.35rem;">{row['Swift File']}</div>
+                        <div class="fc-meta">{row['Feature']} · {row['Signal Category']}</div>
+                        <div class="fc-body">{row['Summary'][:180]}…</div>
+                    </div>""", unsafe_allow_html=True)
+        else:
+            st.caption("No files match this selection.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -628,48 +731,49 @@ with tab2:
 
         with st.chat_message("assistant", avatar="📱"):
             with st.spinner("Retrieving context…"):
-                turn = len([m for m in st.session_state.chat_history if m["role"] == "assistant"])
-                mock_responses = {
-                    0: (
-                        "Based on the indexed Swift codebase, here are the components ranked by "
-                        "current risk exposure:\n\n"
-                        "**1. KernelBootTimeHarvester.swift — Critical**  \n"
-                        "Uses `sysctl()` to read kernel boot time — now restricted in iOS 18.5 "
-                        "Lockdown Mode. Needs an immediate fallback signal.\n\n"
-                        "**2. DeviceFingerprintCollector.swift — Critical**  \n"
-                        "Aggregates multiple hardware identifiers. ATT expansion in iOS 18.4 "
-                        "triggers consent requirements for first-party aggregation.\n\n"
-                        "**3. BiometricAuthProvider.swift — High**  \n"
-                        "LAContext queries appear in the App Privacy Report under sensitive signals. "
-                        "App Store review automation is beginning to flag this.\n\n"
-                        "**4. IDFVProvider.swift — Medium**  \n"
-                        "Must be declared in `PrivacyInfo.xcprivacy` — non-compliant submissions "
-                        "are currently being rejected.\n\n"
-                        "**Recommendation:** Address KernelBootTime fallback first, then complete "
-                        "a Privacy Manifest audit before the next submission."
-                    ),
-                    1: (
-                        "Great follow-up. The key difference between the two critical files is "
-                        "*scope of impact*:\n\n"
-                        "- **KernelBootTimeHarvester** fails silently at runtime — the call "
-                        "returns an error or empty value rather than crashing, so you may not "
-                        "notice degraded signal quality until you audit collection rates.\n\n"
-                        "- **DeviceFingerprintCollector** is more likely to trigger a visible "
-                        "consent prompt or an App Store review flag *before* it breaks at "
-                        "runtime, giving you slightly more lead time.\n\n"
-                        "Prioritise KernelBootTime for the next sprint and DeviceFingerprint "
-                        "before the next App Store submission cycle."
-                    ),
-                }
-                response_text = mock_responses.get(
-                    turn,
-                    "That's a good question. Based on the current codebase context, "
-                    "I don't see a directly impacted file for that specific scenario, "
-                    "but I'd recommend auditing `MemoryUsageHarvester.swift` and "
-                    "`NetworkReachability.swift` as secondary candidates. "
-                    "Would you like me to explain the risk vectors for either of those?"
+                embedder = get_embedder()
+                retriever = get_retriever()
+                llm = get_llm()
+
+                query_vec = embedder.embed_query(query)
+                raw_results = retriever.retrieve_code_knowledge_with_rerank(
+                    query_vec, k=6, fetch_k=20
                 )
-                sources = records[:6]
+
+                # Map retrieved results to the same shape as `records` for display
+                sources = []
+                for r in raw_results:
+                    lvl, rtype, reason, zs_scores = classify_risk_zs_with_scores(r.get("content", ""))
+                    sources.append({
+                        "Swift File":        shorten(r.get("file_path", "")),
+                        "file_path":         r.get("file_path", ""),
+                        "Feature":           r.get("feature", ""),
+                        "Risk Level":        lvl,
+                        "Risk Type":         rtype,
+                        "Risk Reason":       reason,
+                        "Signal Category":   signal_category(r.get("content", "")),
+                        "Summary":           r.get("content", ""),
+                        "cosine_similarity": r.get("cosine_similarity", r.get("similarity", 0.0)),
+                        "zs_scores":         zs_scores,
+                    })
+
+                system_instructions = (
+                    "You are an iOS risk analysis assistant. "
+                    "Answer concisely using the retrieved Swift file context. "
+                    "Highlight the most at-risk files and explain why."
+                )
+                prompt = build_prompt(
+                    query,
+                    [{
+                        "snapshot_chunk_id": s["Swift File"],
+                        "similarity": s["cosine_similarity"],
+                        "chunk_text": s["Summary"],
+                    } for s in sources],
+                    system_instructions=system_instructions,
+                )
+                response_text = llm.generate(
+                    prompt, model="meta/llama-3.1-70b-instruct"
+                ).text
 
                 st.markdown(response_text)
 
@@ -682,7 +786,10 @@ with tab2:
                                 {rb_html(src['Risk Level'])}
                                 <div class="fc-name" style="margin-top:.3rem;">{src['Swift File']}</div>
                                 <div class="fc-meta">{src['Feature']} · {src['Signal Category']}</div>
-                                <div class="fc-body">{src['Summary'][:160]}…</div>
+                                <div class="fc-body" style="margin-top:.3rem;">{src['Summary'][:160]}…</div>
+                                <div class="fc-meta" style="margin-top:.3rem;color:#6b7280;">
+                                    similarity: {src['cosine_similarity']:.3f}
+                                </div>
                             </div>""", unsafe_allow_html=True)
 
         st.session_state.chat_history.append({
@@ -702,28 +809,150 @@ with tab3:
     else:
         f1, f2 = st.columns([1, 1])
         with f1:
-            sel_risk = st.selectbox("Filter by risk level", ["All","High","Medium","Low"], key="t3r")
+            sel_risk = st.selectbox("Filter by risk level", ["All","High","Medium","Low","No Impact"], key="t3r")
         with f2:
             sel_feat = st.selectbox("Filter by feature",
                 ["All"] + sorted(df["Feature"].dropna().unique().tolist()), key="t3f")
 
         view = df.copy()
         if sel_risk != "All":
-            view = view[view["Risk Level"] == sel_risk]
+            view = view[view["Effective Risk"] == sel_risk]
         if sel_feat != "All":
             view = view[view["Feature"] == sel_feat]
 
-        disp = view[["Swift File","Feature","Signal Category","Risk Level","Risk Type","Risk Reason"]].copy()
+        disp = view[["Swift File","Feature","Signal Category","Effective Risk","Risk Type","Risk Reason"]].copy()
         st.dataframe(disp, use_container_width=True, height=280)
 
         st.markdown('<div class="sec" style="margin-top:1.1rem;">File Cards</div>', unsafe_allow_html=True)
-        ca, cb = st.columns(2)
-        for i, row in enumerate(view.to_dict("records")):
-            with (ca if i % 2 == 0 else cb):
-                st.markdown(f"""
-                <div class="{fc_cls(row['Risk Level'])}">
-                    {rb_html(row['Risk Level'])}
-                    <div class="fc-name" style="margin-top:.35rem;">{row['Swift File']}</div>
-                    <div class="fc-meta">{row['Feature']} · {row['Risk Type']}</div>
-                    <div class="fc-body">{row['Risk Reason']}<br><br>{row['Summary'][:200]}…</div>
-                </div>""", unsafe_allow_html=True)
+        for row in view.to_dict("records"):
+            eff = row["Effective Risk"]
+            label = f"{row['Swift File']}  ·  {eff}  ·  {row['Feature']}"
+            with st.expander(label, expanded=False):
+                col_l, col_r = st.columns([3, 2])
+
+                with col_l:
+                    # ── Full summary (traceability: LLM-generated from raw Swift code)
+                    st.markdown("**Summary**")
+                    st.markdown(row["Summary"])
+
+                    # ── Raw Swift source (traceability: original source code)
+                    st.markdown("**Raw Source**")
+                    raw = get_raw_source(row["file_path"])
+                    st.code(raw, language="swift")
+
+                with col_r:
+                    # ── Load bulletins first so effective risk can be computed
+                    bulletins = get_related_bulletins(row["Summary"])
+                    source_map = load_chunk_source_map()
+                    BULLETIN_MIN_SIM = 0.55
+                    bulletins = [
+                        b for b in bulletins
+                        if b.get("cosine_similarity", b.get("similarity", 0.0)) >= BULLETIN_MIN_SIM
+                    ]
+
+                    # ── Effective risk banner (uses pre-computed value from record)
+                    eff_level = row["Effective Risk"]
+                    if bulletins:
+                        top_sim = max(
+                            b.get("cosine_similarity", b.get("similarity", 0.0))
+                            for b in bulletins
+                        )
+                        eff_sub = f"Backed by {len(bulletins)} matching Apple bulletin(s). Top similarity: {top_sim:.3f}."
+                    else:
+                        eff_sub = "No matching Apple bulletins found. Not currently impacted by any indexed Apple changes."
+                    if eff_level == "High":
+                        eff_bg, eff_border, eff_color = "#fef2f2", "#fecaca", "#b91c1c"
+                    elif eff_level == "Medium":
+                        eff_bg, eff_border, eff_color = "#fffbeb", "#fde68a", "#92400e"
+                    else:
+                        eff_bg, eff_border, eff_color = "#f0fdf4", "#bbf7d0", "#15803d"
+
+                    st.markdown(f"""
+                    <div style="background:{eff_bg};border:1px solid {eff_border};
+                                border-radius:8px;padding:.6rem .85rem;margin-bottom:.85rem;">
+                        <div style="font-size:.68rem;font-weight:600;color:#6b7280;
+                                    text-transform:uppercase;letter-spacing:.07em;margin-bottom:.25rem;">
+                            Effective Risk
+                        </div>
+                        <div style="font-size:1rem;font-weight:700;color:{eff_color};">
+                            {eff_level}
+                        </div>
+                        <div style="font-size:.74rem;color:#6b7280;margin-top:.2rem;line-height:1.45;">
+                            {eff_sub}
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                    # ── Classification confidence (intrinsic signal sensitivity)
+                    st.markdown("**Signal Sensitivity** *(zero-shot)*")
+                    level_colors = {"High": "#ef4444", "Medium": "#f59e0b", "Low": "#22c55e"}
+                    scores = row.get("zs_scores", {})
+                    for lbl, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
+                        color = level_colors.get(lbl, "#6b7280")
+                        st.markdown(f"""
+                        <div style="margin-bottom:.5rem;">
+                            <div style="display:flex;justify-content:space-between;font-size:.82rem;">
+                                <span style="color:{color};font-weight:600;">{lbl}</span>
+                                <span style="color:#374151;">{score:.1%}</span>
+                            </div>
+                            <div style="background:#f3f4f6;border-radius:4px;height:6px;margin-top:.25rem;">
+                                <div style="background:{color};width:{score*100:.1f}%;height:100%;border-radius:4px;"></div>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+
+                    # ── Related Apple bulletins
+                    st.markdown("**Related Apple Bulletins**")
+                    if bulletins:
+                        for b in bulletins:
+                            sim = b.get("cosine_similarity", b.get("similarity", 0.0))
+                            full_text = (b.get("chunk_text") or b.get("content") or "")
+                            chunk_id = b.get("snapshot_chunk_id")
+                            url = source_map.get(chunk_id, "")
+                            link_html = (
+                                f'<a href="{url}" target="_blank" style="font-size:.75rem;'
+                                f'color:#2563eb;text-decoration:none;font-weight:500;">↗ View source</a>'
+                                if url else ""
+                            )
+                            # Quality badge based on similarity threshold
+                            if sim >= 0.75:
+                                badge_html = (
+                                    '<span style="font-size:.68rem;font-weight:600;'
+                                    'background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;'
+                                    'padding:.1rem .45rem;border-radius:999px;">Strong</span>'
+                                )
+                            elif sim >= 0.55:
+                                badge_html = (
+                                    '<span style="font-size:.68rem;font-weight:600;'
+                                    'background:#fffbeb;color:#92400e;border:1px solid #fde68a;'
+                                    'padding:.1rem .45rem;border-radius:999px;">Plausible</span>'
+                                )
+                            else:
+                                badge_html = (
+                                    '<span style="font-size:.68rem;font-weight:600;'
+                                    'background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;'
+                                    'padding:.1rem .45rem;border-radius:999px;">Weak</span>'
+                                )
+                            full_section = (
+                                f'<div style="max-height:180px;overflow-y:auto;margin-top:.4rem;'
+                                f'background:#f9fafb;border-radius:4px;padding:.5rem .6rem;'
+                                f'font-size:.78rem;color:#374151;line-height:1.55;'
+                                f'border:1px solid #f3f4f6;">{full_text}</div>'
+                                if len(full_text) > 200 else
+                                f'<div style="font-size:.8rem;color:#374151;line-height:1.55;">{full_text}</div>'
+                            )
+                            st.markdown(f"""
+                            <div style="border:1px solid #e5e7eb;border-radius:6px;
+                                        padding:.65rem .8rem;margin-bottom:.5rem;">
+                                <div style="display:flex;justify-content:space-between;
+                                            align-items:center;margin-bottom:.3rem;">
+                                    <div style="display:flex;align-items:center;gap:.45rem;">
+                                        <span style="font-size:.74rem;color:#6b7280;">
+                                            similarity: {sim:.3f}
+                                        </span>
+                                        {badge_html}
+                                    </div>
+                                    {link_html}
+                                </div>
+                                {full_section}
+                            </div>""", unsafe_allow_html=True)
+                    else:
+                        st.caption("None — see Effective Risk above.")

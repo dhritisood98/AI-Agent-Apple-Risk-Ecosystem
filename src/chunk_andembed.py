@@ -5,14 +5,14 @@ from .embedders import Embedder, get_embedder_spec
 def main():
     sb = get_supabase_client()
 
-    spec = get_embedder_spec("bge_small")
+    spec = get_embedder_spec("nomic_768")
     embedder = Embedder(spec)
 
     print("Fetching snapshot chunks from Supabase...")
 
     response = (
         sb.table("snapshot_chunks")
-        .select("id, snapshot_id, chunk_index, chunk_text")
+        .select("id, snapshot_id, chunk_index, chunk_text, snapshots!inner(source_id)")
         .execute()
     )
     chunks = response.data
@@ -32,6 +32,7 @@ def main():
         snapshot_id = chunk.get("snapshot_id")
         chunk_index = chunk.get("chunk_index")
         text = chunk.get("chunk_text")
+        source_id = (chunk.get("snapshots") or {}).get("source_id")
 
         if not text:
             print(f"⚠️ Skipping chunk {chunk_id} - No chunk_text found.")
@@ -61,9 +62,10 @@ def main():
 
             payload = {
                 "snapshot_chunk_id": chunk_id,
+                "snapshot_id": snapshot_id,
+                "source_id": source_id,
                 "embedding": vector,
-                "model_name": "bge-small-en-v1.5",
-                "agent_name": "ios-risk-agent",
+                "model_name": "nomic-embed-text-v1.5",
             }
 
             sb.table(spec.table).insert(payload).execute()
