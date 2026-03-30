@@ -1,3 +1,12 @@
+import streamlit as st 
+from streamlit_plotly_events import plotly_events
+# --- Session State ---
+if "selected_signal" not in st.session_state:
+    st.session_state.selected_signal = None
+
+if "selected_file" not in st.session_state:
+    st.session_state.selected_file = None
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -428,20 +437,53 @@ with tab1:
                     orientation="h",
                     marker=dict(color=bar_colors, line=dict(width=0)),
                     text=sig["Count"], textposition="outside",
+                    customdata=sig["Category"],
                     textfont=dict(size=11, color="#6b7280"),
                     hovertemplate="<b>%{y}</b><br>%{x} files<extra></extra>",
                 ))
                 fig_bar.update_layout(
-                    **PLOTLY_BASE,
                     xaxis=dict(visible=False),
-                    yaxis=dict(tickfont=dict(size=11, color="#374151")),
-                    height=240,
+                    yaxis=dict(
+                        visible=True,
+                        showgrid=False,
+                        tickfont=dict(size=13, color="#E5E7EB")
+                    ),
+                    margin=dict(l=150, r=20, t=20, b=20),  
+                    height=260,
                     bargap=0.35,
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
                 )
-                st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
+                selected = plotly_events(
+                    fig_bar,
+                    click_event=True,
+                    hover_event=False,
+                    select_event=False
+                )
+                if selected:
+                    st.session_state.selected_signal = selected[0]["y"]       
 
+                # --- SIGNAL DRILL DOWN ---
+                if st.session_state.get("selected_signal") is not None:
+                    st.markdown(f"files affected: {st.session_state.selected_signal}")
+
+                    filtered = df[df["Signal Category"] == st.session_state.selected_signal]
+
+                    if not filtered.empty:
+                        st.write("### Files impacted")
+
+                        for i, row in filtered.iterrows():
+                            file_name = row.get("file_name") or row.get("File Name") or row.iloc[0]
+                            risk = row.get("risk_level") or row.get("Risk Level") or "Unknown"
+
+                            if st.button(f"{file_name} - {risk}", key=f"file_{i}"):
+                                st.session_state.selected_file = file_name
+                    else:
+                        st.warning("No data available")
+                else:
+                    st.empty()
         # ── Top files ranked bar ───────────────────────────────────────────────
-        st.markdown('<div class="sec" style="margin-top:.5rem;">Top Files by Risk Priority</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec">Top Files by Risk Priority</div>', unsafe_allow_html=True)
         if not df.empty:
             risk_map = {"High": 3, "Medium": 2, "Low": 1}
             ranked = df.copy()
@@ -727,3 +769,24 @@ with tab3:
                     <div class="fc-meta">{row['Feature']} · {row['Risk Type']}</div>
                     <div class="fc-body">{row['Risk Reason']}<br><br>{row['Summary'][:200]}…</div>
                 </div>""", unsafe_allow_html=True)
+
+# --- FILE DRILL DOWN ---
+if st.session_state.get("selected_file"):
+    st.markdown(f"## 📄 File Analysis: {st.session_state.selected_file}")
+
+    file_data = df[df["File Name"] == st.session_state.selected_file]
+
+    if not file_data.empty:
+        row = file_data.iloc[0]
+
+        st.write("### Risk Level")
+        st.write(row.get("Risk Level", "N/A"))
+
+        st.write("### Signal Category")
+        st.write(row.get("Signal Category", "N/A"))
+
+        st.write("### Source Traceability")
+        st.write(row.get("Source", "Not available"))
+
+        st.write("### Extracted Content")
+        st.info(row.get("Extracted Text", "No context available"))
