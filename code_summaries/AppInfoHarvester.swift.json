@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides a data harvesting mechanism for application information, specifically locale identifier and user interface style. It defines a protocol `AppInfoHarvesting` and a struct `AppInfoHarvester` that conforms to this protocol. The harvester uses `LocaleInfoProviding` and `UserInterfaceTraitsProviding` providers to gather the required information.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing two pieces of information: the locale identifier and the user interface style. The locale identifier can reveal the device's geographical location and language settings, while the user interface style can indicate whether the device is in light or dark mode. This information can be used to differentiate devices and create a more unique fingerprint."
+}

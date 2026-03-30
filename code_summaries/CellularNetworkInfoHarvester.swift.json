@@ -1,0 +1,5 @@
+{
+  "file_role": "Harvester",
+  "content_summary": "This Swift file provides a harvester for cellular network information. It defines a protocol `CellularNetworkInfoHarvesting` that specifies the properties to be harvested, including mobile country codes, mobile network codes, and mobile network technologies. The `CellularNetworkInfoHarvester` struct implements this protocol and provides an initializer that takes a `CellularServiceInfoProviding` instance. On iOS, it uses the `CTTelephonyNetworkInfo` class from the CoreTelephony framework to provide the necessary information. In a simulator environment, it uses a fake implementation to provide empty arrays for the harvested properties.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the cellular network the device is connected to. The harvested properties, including mobile country codes, mobile network codes, and mobile network technologies, can be used to identify the device's location, network provider, and type of network connection. This information can be combined with other device attributes to create a unique device fingerprint."
+}

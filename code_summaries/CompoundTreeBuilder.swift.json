@@ -1,0 +1,5 @@
+{
+  "file_role": "Coordinator",
+  "content_summary": "This file contains a struct called CompoundTreeBuilder, which acts as a coordinator to gather device information from various providers. It has two initializers: one that creates an instance with a default set of providers, and another that allows for a custom set of providers. The struct conforms to the DeviceInfoTreeProvider protocol, which requires it to build a tree of device information items based on a given configuration. The buildTree function maps over the providers, builds a tree for each one, and combines them into a single tree with a label of 'Device Fingerprint'.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by aggregating information from multiple providers, including AppInfo, HardwareInfo, OSInfo, Identifier, CellularNetworkInfo, and LocalAuthenticationInfo. This aggregated information forms the basis of the device fingerprint, which can be used to uniquely identify a device."
+}

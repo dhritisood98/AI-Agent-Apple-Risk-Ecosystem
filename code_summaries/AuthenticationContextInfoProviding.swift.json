@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides information about the device's authentication context, specifically whether passcode and biometric authentication are enabled, and the type of biometric authentication supported. It uses the LocalAuthentication framework to evaluate the device's authentication policies and extract this information.",
+  "fingerprint_contribution": "This file contributes to the device fingerprint by providing unique information about the device's authentication configuration. The presence or absence of passcode and biometric authentication, as well as the type of biometric authentication supported, can be used to distinguish between devices and create a more unique fingerprint."
+}

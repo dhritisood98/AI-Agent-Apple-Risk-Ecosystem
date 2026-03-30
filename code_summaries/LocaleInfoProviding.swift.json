@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This Swift file defines a protocol called LocaleInfoProviding, which has a single property called identifier of type String. The file also extends the built-in Locale class to conform to this protocol. This means that any class that conforms to LocaleInfoProviding must have an identifier property. The extension allows the Locale class to be used wherever LocaleInfoProviding is expected.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the device's locale settings. The identifier property, which is required by the LocaleInfoProviding protocol, likely contains a string that identifies the device's locale, such as the language and region settings. This information can be used to differentiate between devices and create a more unique fingerprint."
+}

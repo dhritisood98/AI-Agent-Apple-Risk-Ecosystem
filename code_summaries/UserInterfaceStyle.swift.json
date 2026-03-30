@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides an enum `UserInterfaceStyle` to represent the style associated with the app's user interface. It maps the `UIUserInterfaceStyle` from UIKit to a custom `UserInterfaceStyle` enum with cases for dark, light, and undefined styles. The enum is encodable, allowing it to be converted to a JSON-compatible format. The file also includes an extension to initialize the `UserInterfaceStyle` enum from a `UIUserInterfaceStyle` value.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the app's user interface style. The user interface style can be used to identify the device's settings and preferences, which can be used in combination with other data to create a unique device fingerprint. The specific contribution is a single value indicating the user interface style, which can be one of 'dark', 'light', or 'undefined'. This information can be used to differentiate between devices with different user interface settings."
+}

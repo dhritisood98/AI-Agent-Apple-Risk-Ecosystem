@@ -1,0 +1,5 @@
+{
+  "file_role": "Harvester",
+  "content_summary": "This file defines a protocol (OSInfoHarvesting) and a struct (OSInfoHarvester) that harvests information about the operating system. The OSInfoHarvester struct conforms to the OSInfoHarvesting protocol and provides properties for accessing the OS time zone identifier, OS type, OS version, OS release, kernel version, OS build, and boot time. The properties are implemented using the SystemControlValuesProviding and TimeZoneInfoProviding protocols.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the operating system, which can be used to uniquely identify a device. The harvested information includes the OS time zone identifier, OS type, OS version, OS release, kernel version, OS build, and boot time. This information can be used to create a fingerprint that distinguishes one device from another."
+}
