@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup, Tag
 
 from .db import get_supabase_client
 from .config import USER_AGENT
-from .processor.hybrid_chunker import IOSHybridChunker
+from .hybrid_chunker import IOSHybridChunker
 
 HEADERS = {"User-Agent": USER_AGENT}
 
@@ -28,7 +28,7 @@ DEBUG_FETCH = False
 # Chunk export
 ENABLE_CHUNK_EXPORT = True
 EXPORT_DIR = "data/chunk_debug"
-EXPORT_LIMIT = 1  # when DEBUG_SINGLE_URL=False, export only first N docs to avoid too many files
+EXPORT_LIMIT = 1 
 
 NOISE_PATTERNS = [
     r"Helpful\?\s*Yes\s*No",
