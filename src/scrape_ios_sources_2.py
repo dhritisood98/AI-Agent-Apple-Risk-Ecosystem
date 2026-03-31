@@ -1,8 +1,10 @@
 # src/scrape_ios_sources_2.py
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -10,6 +12,7 @@ from bs4 import BeautifulSoup, Tag
 
 from .db import get_supabase_client
 from .config import USER_AGENT
+from .processor.hybrid_chunker import IOSHybridChunker
 
 HEADERS = {"User-Agent": USER_AGENT}
 
@@ -18,9 +21,14 @@ MAX_PREVIEW_TEXT_CHARS = 25000
 REQUEST_TIMEOUT_S = 45
 
 # Debug flags
-DEBUG_SINGLE_URL = False
+DEBUG_SINGLE_URL = True
 DEBUG_URL = "https://support.apple.com/en-us/120304"
 DEBUG_FETCH = False
+
+# Chunk export
+ENABLE_CHUNK_EXPORT = True
+EXPORT_DIR = "data/chunk_debug"
+EXPORT_LIMIT = 1  # when DEBUG_SINGLE_URL=False, export only first N docs to avoid too many files
 
 NOISE_PATTERNS = [
     r"Helpful\?\s*Yes\s*No",
@@ -68,6 +76,15 @@ NAV_LINES_TO_DROP = {
     "0",
 }
 
+NOISE_LINE_PATTERNS = [
+    r"^Apple Support$",
+    r"^Table of Contents$",
+    r"^United States$",
+    r"^Copyright © Apple Inc\..*$",
+    r"^All rights reserved\.$",
+    r"^View in English$",
+]
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -92,11 +109,14 @@ def _cap_text(text: str, max_chars: int) -> str:
     return head.rstrip() + "\n\n[...truncated...]\n\n" + tail.lstrip()
 
 
+def _slugify(text: str, max_len: int = 80) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = text.strip("_")
+    return text[:max_len] or "untitled"
+
+
 def _remove_noise_tags(root: Tag) -> None:
-    """
-    Conservative cleanup only.
-    Avoid deleting content containers.
-    """
     for tag in root.find_all(["script", "style", "noscript"]):
         tag.decompose()
 
@@ -108,8 +128,19 @@ def _remove_navigation_lines(text: str) -> str:
     for line in lines:
         if not line:
             continue
+
         if line in NAV_LINES_TO_DROP:
             continue
+
+        should_drop = False
+        for pat in NOISE_LINE_PATTERNS:
+            if re.match(pat, line, flags=re.IGNORECASE):
+                should_drop = True
+                break
+
+        if should_drop:
+            continue
+
         kept.append(line)
 
     return "\n".join(kept).strip()
@@ -198,12 +229,38 @@ def _extract_product_family(text: str) -> Optional[str]:
 
 
 def _extract_sections_from_text(text: str) -> List[Dict[str, Any]]:
-    """
-    Simple fallback sectioning.
-    Split on blank lines, keep meaningful blocks.
-    """
-    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    if not text.strip():
+        return []
+
+    marker_pattern = re.compile(
+        r"(?=(?:\bCVE-\d{4}-\d+\b|\bImpact:\b|\bDescription:\b|\bReleased\b))"
+    )
+
+    parts = [p.strip() for p in marker_pattern.split(text) if p.strip()]
     sections: List[Dict[str, Any]] = []
+    order = 1
+
+    for part in parts:
+        if len(part) < 80:
+            continue
+
+        first_line = part.split("\n", 1)[0].strip()
+        section_title = first_line[:120] if first_line else f"Section {order}"
+
+        sections.append(
+            {
+                "section_title": section_title,
+                "section_text": part,
+                "section_order": order,
+            }
+        )
+        order += 1
+
+    if sections:
+        return sections
+
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    sections = []
     order = 1
 
     for block in blocks:
@@ -249,20 +306,12 @@ def fetch_parse_and_clean(url: str) -> Dict[str, Any]:
     title = _extract_title(soup)
 
     _remove_noise_tags(soup)
-
-    # Use full soup text; proven to work on your debug run
     raw_text = soup.get_text("\n", strip=True)
 
     if DEBUG_FETCH:
         print("\n===== DEBUG FETCH =====", flush=True)
         print(f"url: {url}", flush=True)
         print(f"raw_html_len: {len(raw_html)}", flush=True)
-        print(
-            f"title_tag: {soup.title.get_text(' ', strip=True) if soup.title else 'NO TITLE'}",
-            flush=True,
-        )
-        print(f"main exists: {soup.find('main') is not None}", flush=True)
-        print(f"article exists: {soup.find('article') is not None}", flush=True)
         print(f"body_text_preview_before_clean: {raw_text[:500]}", flush=True)
 
     clean_text_full = _normalize_ws(raw_text)
@@ -275,10 +324,6 @@ def fetch_parse_and_clean(url: str) -> Dict[str, Any]:
     published_date = _extract_published_date(raw_html) or _extract_published_date(clean_text_full)
     ios_version = _extract_ios_version(f"{title}\n{clean_text_full}")
     product_family = _extract_product_family(f"{title}\n{clean_text_full}")
-
-    if DEBUG_FETCH:
-        print(f"clean_text_len_after_clean: {len(clean_text_full)}", flush=True)
-        print(f"section_count: {len(sections)}", flush=True)
 
     return {
         "raw_html": raw_html,
@@ -302,16 +347,6 @@ def _build_snapshot_payload(
     content_hash: str,
     parsed: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    IMPORTANT:
-    This payload intentionally matches the CURRENT existing snapshots schema:
-      - source_id
-      - fetched_at
-      - content_hash
-      - raw_text
-      - clean_text
-      - agent_name
-    """
     return {
         "source_id": source_id,
         "fetched_at": fetched_at,
@@ -338,6 +373,59 @@ def _get_last_snapshot_hash(sb, source_id: Any) -> Optional[str]:
     return None
 
 
+def _generate_chunks(parsed: Dict[str, Any], src_id: Any, source_name: str, url: str) -> List[Dict[str, Any]]:
+    chunker = IOSHybridChunker(
+        max_tokens=800,
+        min_tokens=50,
+        overlap=100,
+        summary_tokens=120,
+    )
+
+    return chunker.chunk_parsed_document(
+        parsed=parsed,
+        source_metadata={
+            "source_id": src_id,
+            "source_name": source_name,
+            "source_url": url,
+        },
+    )
+
+
+def _export_chunks_to_json(
+    parsed: Dict[str, Any],
+    chunks: List[Dict[str, Any]],
+    src_id: Any,
+    source_name: str,
+    url: str,
+) -> str:
+    export_path = Path(EXPORT_DIR)
+    export_path.mkdir(parents=True, exist_ok=True)
+
+    title_slug = _slugify(parsed.get("page_title", "untitled"))
+    file_name = f"{src_id}_{title_slug}.json"
+    file_path = export_path / file_name
+
+    payload = {
+        "source_id": src_id,
+        "source_name": source_name,
+        "source_url": url,
+        "page_title": parsed.get("page_title"),
+        "ios_version": parsed.get("ios_version"),
+        "product_family": parsed.get("product_family"),
+        "published_date": parsed.get("published_date"),
+        "clean_text_len": parsed.get("clean_text_len"),
+        "section_count": len(parsed.get("sections", [])),
+        "chunk_count": len(chunks),
+        "sections": parsed.get("sections", []),
+        "chunks": chunks,
+    }
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    return str(file_path)
+
+
 def main():
     sb = get_supabase_client()
 
@@ -349,7 +437,13 @@ def main():
         print("ios_version:", parsed["ios_version"], flush=True)
         print("product_family:", parsed["product_family"], flush=True)
         print("section_count:", len(parsed["sections"]), flush=True)
-        print("preview:", parsed["clean_text_preview"][:1000], flush=True)
+
+        chunks = _generate_chunks(parsed, "debug_source", "debug_name", DEBUG_URL)
+        print("chunk_count:", len(chunks), flush=True)
+
+        if ENABLE_CHUNK_EXPORT:
+            out = _export_chunks_to_json(parsed, chunks, "debug_source", "debug_name", DEBUG_URL)
+            print("chunk_export_path:", out, flush=True)
         return
 
     try:
@@ -370,8 +464,9 @@ def main():
     inserted = 0
     skipped = 0
     failed = 0
+    exported = 0
 
-    for s in sources:
+    for idx, s in enumerate(sources, start=1):
         now = _utc_now_iso()
 
         src_id = s["id"]
@@ -422,35 +517,40 @@ def main():
                 f"⏭️ No change detected: {source_name} | title={page_title}",
                 flush=True,
             )
-            continue
-
-        payload = _build_snapshot_payload(
-            source_id=src_id,
-            source_url=url,
-            source_name=source_name,
-            agent_name=agent_name,
-            fetched_at=now,
-            content_hash=new_hash,
-            parsed=parsed,
-        )
-
-        try:
-            sb.table("snapshots").insert(payload).execute()
-            inserted += 1
-            print(
-                f"✅ Stored NEW iOS snapshot: {source_name} | title={page_title} | len={parsed['clean_text_len']}",
-                flush=True,
+        else:
+            payload = _build_snapshot_payload(
+                source_id=src_id,
+                source_url=url,
+                source_name=source_name,
+                agent_name=agent_name,
+                fetched_at=now,
+                content_hash=new_hash,
+                parsed=parsed,
             )
-        except Exception as e:
-            failed += 1
-            print(
-                f"⚠️ DB insert failed: {source_name} | title={page_title} | err={type(e).__name__}: {e}",
-                flush=True,
-            )
-            continue
+
+            try:
+                sb.table("snapshots").insert(payload).execute()
+                inserted += 1
+                print(
+                    f"✅ Stored NEW iOS snapshot: {source_name} | title={page_title} | len={parsed['clean_text_len']}",
+                    flush=True,
+                )
+            except Exception as e:
+                failed += 1
+                print(
+                    f"⚠️ DB insert failed: {source_name} | title={page_title} | err={type(e).__name__}: {e}",
+                    flush=True,
+                )
+                continue
+
+        if ENABLE_CHUNK_EXPORT and exported < EXPORT_LIMIT:
+            chunks = _generate_chunks(parsed, src_id, source_name, url)
+            out = _export_chunks_to_json(parsed, chunks, src_id, source_name, url)
+            exported += 1
+            print(f"📦 Exported chunks -> {out}", flush=True)
 
     print(
-        f"\n🏁 Done. inserted={inserted} skipped={skipped} failed={failed}",
+        f"\n🏁 Done. inserted={inserted} skipped={skipped} failed={failed} exported={exported}",
         flush=True,
     )
 
