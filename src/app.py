@@ -191,7 +191,14 @@ PLOTLY_BASE = dict(
 # ── Supabase connection ───────────────────────────────────────────────────────
 @st.cache_resource
 def get_supabase():
-    return create_client(settings.supabase_url, settings.supabase_key)
+    # Prefer st.secrets (Streamlit Cloud), fall back to env vars (local)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except (KeyError, FileNotFoundError):
+        url = settings.supabase_url
+        key = settings.supabase_key
+    return create_client(url, key)
 
 @st.cache_resource
 def get_embedder():
