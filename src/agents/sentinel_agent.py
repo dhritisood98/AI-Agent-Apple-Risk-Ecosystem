@@ -30,8 +30,24 @@ from src.embedders import get_embedder_spec, Embedder
 from src.retriever import Retriever
 from src.similarity import rerank_by_cosine
 from src.zero_shot import classify_risk_zs_with_scores
+from src.llm_clients import NIMClient, NoLLM
+from src.prompts import build_rationale_prompt
+from src.config import settings
 
 BULLETIN_MIN_SIM = 0.55
+LLM_MODEL = "meta/llama-3.1-70b-instruct"
+
+RECOMMENDED_ACTIONS = {
+    "High":   "Immediate review required — signal may be blocked or restricted in current iOS.",
+    "Medium": "Monitor next 2 Apple releases — API behavior change possible.",
+    "Low":    "No action needed — low disruption risk.",
+}
+
+def _extract_cve(text: str) -> str:
+    """Pull the first CVE ID from bulletin text."""
+    import re
+    m = re.search(r'CVE-\d{4}-\d{4,7}', text or "")
+    return m.group(0) if m else ""
 
 
 def _signal_category(text: str) -> str:
@@ -67,6 +83,10 @@ class SentinelAgent(BaseAgent):
         spec = get_embedder_spec("nomic_768")
         self._embedder = Embedder(spec)
         self._retriever = Retriever(supabase_url, supabase_key)
+        self._llm = (
+            NIMClient(settings.nvidia_api_key, settings.nim_base_url)
+            if settings.nvidia_api_key else NoLLM()
+        )
 
     def _triage_file(self, file_path: str, feature: str, content: str) -> dict:
         """Run full triage for a single Swift file and return the verdict."""
@@ -93,6 +113,23 @@ class SentinelAgent(BaseAgent):
         if ranked:
             top_preview = (ranked[0].get("chunk_text") or "")[:200]
 
+        # ── LLM rationale (only for High / Medium — keeps costs low) ──────────
+        triggering_cve = _extract_cve(top_preview)
+        rationale = ""
+        if effective_risk in ("High", "Medium") and top_preview:
+            try:
+                prompt = build_rationale_prompt(
+                    file_name=file_name,
+                    summary=content,
+                    effective_risk=effective_risk,
+                    zs_level=zs_level,
+                    top_bulletin=top_preview,
+                    triggering_cve=triggering_cve,
+                )
+                rationale = self._llm.generate(prompt, model=LLM_MODEL).text.strip()
+            except Exception as e:
+                print(f"    ⚠️  Rationale LLM call failed for {file_name}: {e}")
+
         return {
             "file_name":            file_name,
             "file_path":            file_path,
@@ -103,6 +140,9 @@ class SentinelAgent(BaseAgent):
             "max_sim_score":        round(max_sim, 4),
             "bulletin_count":       len(qualified),
             "top_bulletin_preview": top_preview,
+            "triggering_cve":       triggering_cve,
+            "rationale":            rationale,
+            "recommended_action":   RECOMMENDED_ACTIONS.get(effective_risk, ""),
             "run_at":               self._utc_now(),
         }
 

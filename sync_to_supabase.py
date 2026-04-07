@@ -1,9 +1,12 @@
 import os
 import json
 import hashlib
+from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import OpenAI
 from src.embedders import Embedder, get_embedder_spec
+
+load_dotenv()
 
 # --- 1. CONFIGURATION ---
 # Pulling from Environment Variables for GitHub Actions compatibility

@@ -157,7 +157,10 @@ def signal_category(text: str) -> str:
         return "Locale / UI"
     if any(x in t for x in ["cellular","carrier","network","reachability","mobile data","sim"]):
         return "Network / Cellular"
-    if any(x in t for x in ["keychain","disk space","disk","storage","identifier storage"]):
+    if any(x in t for x in ["keychain","disk space","disk","storage","identifier storage",
+                             "secitem","persistent","kSecClass","secure storage",
+                             "storeidentifier","loadidentifier","uuid","store identifier",
+                             "load identifier"]):
         return "Storage / Keychain"
     if any(x in t for x in ["sha256","sha-256","hash","digest","fingerprint function","checksum"]):
         return "Hashing"
@@ -234,20 +237,28 @@ def get_related_bulletins(content: str, k: int = 3) -> list:
 
 @st.cache_data(ttl=3600)
 def load_chunk_source_map() -> dict:
-    """Returns {snapshot_chunk_id: source_url} by joining snapshot_chunks → snapshots → sources."""
+    """Returns {snapshot_chunk_id: source_url} via vector_chunks_768 → sources join."""
     sb = get_supabase()
-    rows = (
-        sb.table("snapshot_chunks")
-        .select("id, snapshots!inner(source_id, sources!inner(url))")
+    # Step 1: get snapshot_chunk_id → source_id from vector_chunks_768 (549 rows, no pagination issue)
+    vec_rows = (
+        sb.table("vector_chunks_768")
+        .select("snapshot_chunk_id, source_id")
         .execute()
         .data or []
     )
-    result = {}
-    for r in rows:
-        snap = r.get("snapshots") or {}
-        src = snap.get("sources") or {}
-        result[r["id"]] = src.get("url", "")
-    return result
+    # Step 2: get source_id → url from sources
+    src_rows = (
+        sb.table("sources")
+        .select("id, url")
+        .execute()
+        .data or []
+    )
+    source_url_map = {r["id"]: r.get("url", "") for r in src_rows}
+    # Step 3: join locally
+    return {
+        r["snapshot_chunk_id"]: source_url_map.get(r["source_id"], "")
+        for r in vec_rows
+    }
 
 @st.cache_data(ttl=300)
 def load_code_knowledge():
@@ -256,6 +267,7 @@ def load_code_knowledge():
     return res.data or []
 
 BETA_IOS = "26.4 beta 3"
+BETA_IOS_URL = "https://support.apple.com/en-us/126792"
 
 @st.cache_data(ttl=300)
 def load_stable_ios_version() -> str:
@@ -350,8 +362,8 @@ kpi_defs = [
     (c1, "kpi-blue",  "Stable iOS",       CURRENT_IOS,      "Latest monitored release",   None,                         "#2563eb"),
     (c2, "kpi-slate", "Beta Track",        BETA_IOS,         "Forward-looking changes",    None,                         "#64748b"),
     (c3, "kpi-red",   "High Impact",       str(high_n),      "Bulletin-confirmed risk",    high_n / max(total_n, 1),         "#dc2626"),
-    (c4, "kpi-amber", "Medium Impact",     str(medium_n),    "Monitor for API drift",      medium_n / max(total_n, 1),       "#d97706"),
-    (c5, "kpi-green", "No Impact",         str(no_impact_n), "No matching Apple bulletins", no_impact_n / max(total_n, 1),   "#6b7280"),
+    (c4, "kpi-amber", "Medium Impact",     str(medium_n),    "Monitor for API drift",      medium_n / max(total_n, 1),   "#d97706"),
+    (c5, "kpi-green", "Low Impact",        str(low_n),       "Unlikely to break near-term", low_n / max(total_n, 1),       "#16a34a"),
 ]
 for col, accent, label, value, sub, pct, bar_color in kpi_defs:
     bar_html = ""
@@ -360,14 +372,77 @@ for col, accent, label, value, sub, pct, bar_color in kpi_defs:
         <div class="kpi-bar-bg">
             <div class="kpi-bar-fill" style="width:{int(pct*100)}%;background:{bar_color};"></div>
         </div>"""
+    value_html = (
+        f'<a href="{BETA_IOS_URL}" target="_blank" '
+        f'style="color:inherit;text-decoration:none;border-bottom:1px dashed #94a3b8;">{value}</a>'
+        if label == "Beta Track" else value
+    )
     with col:
         st.markdown(f"""
         <div class="kpi {accent}">
             <div class="kpi-label">{label}</div>
-            <div class="kpi-value">{value}</div>
+            <div class="kpi-value">{value_html}</div>
             <div class="kpi-sub">{sub}</div>
             {bar_html}
         </div>""", unsafe_allow_html=True)
+
+@st.cache_data(ttl=3600)
+def load_beta_summary(version: str) -> tuple[list[str], str]:
+    """Returns (bullets, url) from the beta snapshot."""
+    sb = get_supabase()
+    src_rows = (
+        sb.table("sources").select("id, url")
+        .eq("agent_name", "ios-risk-agent").execute().data or []
+    )
+    if not src_rows:
+        return [], ""
+    src_id_to_url = {r["id"]: r.get("url", "") for r in src_rows}
+    major = version.split(".")[0]
+    snaps = (
+        sb.table("snapshots").select("clean_text, source_id")
+        .in_("source_id", list(src_id_to_url.keys()))
+        .order("fetched_at", desc=True).limit(50).execute().data or []
+    )
+    for s in snaps:
+        text = s.get("clean_text", "")
+        if f"iOS {major}" in text or version.split(" ")[0] in text:
+            bullets, seen = [], set()
+            for m in re.finditer(r'Impact:\s*(.+?)(?=\nDescription:|\nCVE-|\Z)', text, re.DOTALL):
+                line = m.group(1).replace("\n", " ").strip()
+                if line not in seen:
+                    seen.add(line)
+                    bullets.append(line)
+                if len(bullets) >= 6:
+                    break
+            url = src_id_to_url.get(s.get("source_id"), "")
+            return bullets, url
+    return [], ""
+
+if True:
+    _beta_bullets, _beta_url = load_beta_summary(BETA_IOS)
+    if _beta_bullets:
+        _src_link = (
+            f'<a href="{_beta_url}" target="_blank" style="font-size:.72rem;color:#64748b;'
+            f'text-decoration:none;border-bottom:1px solid #cbd5e1;">View full release notes ↗</a>'
+            if _beta_url else ""
+        )
+        _items_html = "".join(
+            f'<li style="margin-bottom:.4rem;color:#1e3a5f;font-size:.8rem;line-height:1.55;">{b}</li>'
+            for b in _beta_bullets
+        )
+        st.markdown(f"""
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #64748b;
+                    border-radius:8px;padding:.75rem 1rem;margin-bottom:1rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;">
+                <span style="font-size:.7rem;font-weight:700;color:#64748b;text-transform:uppercase;
+                             letter-spacing:.07em;">iOS {BETA_IOS} — Key changes</span>
+                {_src_link}
+            </div>
+            <ul style="margin:0;padding-left:1.1rem;">{_items_html}</ul>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info(f"iOS {BETA_IOS} has not been scraped yet. Run the Scraper Agent once Apple publishes the release notes.")
 
 PRIVACY_KEYWORDS = [
     "app may be able", "access sensitive", "user data", "privacy", "fingerprint",
@@ -376,28 +451,49 @@ PRIVACY_KEYWORDS = [
     "sandbox", "bypass", "permission", "consent",
 ]
 
-def _extract_bullets(text: str) -> list[str]:
+def _extract_bullets(text: str) -> list[tuple[str, str, list[str]]]:
+    """Returns list of (component, impact, cve_ids) tuples filtered by privacy keywords."""
     bullets = []
-    for match in re.finditer(r'Impact:\s*(.+?)(?=\nDescription:|\nCVE-|\nAvailable for:|\Z)',
-                             text, re.DOTALL):
-        impact = match.group(1).replace("\n", " ").strip()
-        if any(kw in impact.lower() for kw in PRIVACY_KEYWORDS) and impact not in bullets:
-            bullets.append(impact)
+    seen = set()
+    # Capture the full entry block: component, impact, description, then CVE lines
+    for match in re.finditer(
+        r'(?:^|\n)([A-Za-z][^\n]{0,60})\n+Impact:\s*(.+?)(?=\nAvailable for:|\n[A-Z][a-z]|\Z)',
+        text, re.DOTALL
+    ):
+        component = match.group(1).strip()
+        block = match.group(2)
+        # Impact is everything up to Description:
+        impact_m = re.match(r'(.+?)(?=\nDescription:|\nCVE-|\Z)', block, re.DOTALL)
+        impact = impact_m.group(1).replace("\n", " ").strip() if impact_m else block.strip()
+        # Extract CVE IDs from the block
+        cves = re.findall(r'CVE-\d{4}-\d{4,7}', block)
+        if len(component) > 60 or component[0].islower():
+            component = ""
+        if any(kw in impact.lower() for kw in PRIVACY_KEYWORDS) and impact not in seen:
+            seen.add(impact)
+            bullets.append((component, impact, cves))
     return bullets[:5]
 
 @st.cache_data(ttl=300)
-def load_ios_impact_bullets(version: str) -> list[str]:
-    """Extract privacy/API-relevant Impact lines, trying specific version first then major version."""
+def load_ios_impact_bullets(version: str) -> tuple[list[str], str]:
+    """Extract privacy/API-relevant Impact lines plus the source URL."""
     if not version or version == "—":
-        return []
+        return [], ""
     sb = get_supabase()
-    src_ids = [s["id"] for s in
-               sb.table("sources").select("id").eq("agent_name", "ios-risk-agent").execute().data]
-    if not src_ids:
-        return []
+    src_rows = (
+        sb.table("sources")
+        .select("id, url")
+        .eq("agent_name", "ios-risk-agent")
+        .execute()
+        .data or []
+    )
+    if not src_rows:
+        return [], ""
+    src_id_to_url = {r["id"]: r.get("url", "") for r in src_rows}
+    src_ids = list(src_id_to_url.keys())
     snaps = (
         sb.table("snapshots")
-        .select("clean_text")
+        .select("clean_text, source_id")
         .in_("source_id", src_ids)
         .order("fetched_at", desc=True)
         .limit(50)
@@ -406,44 +502,94 @@ def load_ios_impact_bullets(version: str) -> list[str]:
     )
     major = version.split(".")[0]  # e.g. "18" from "18.7.6"
 
-    # Priority 1: snapshot specifically about this exact version
-    for s in snaps:
-        text = s.get("clean_text", "")
-        if f"security content of iOS {version}" in text:
-            bullets = _extract_bullets(text)
-            if bullets:
-                return bullets
+    def _try(snaps_list, match_fn):
+        for s in snaps_list:
+            text = s.get("clean_text", "")
+            if match_fn(text):
+                bullets = _extract_bullets(text)
+                if bullets:
+                    url = src_id_to_url.get(s.get("source_id"), "")
+                    return bullets, url
+        return None, None
 
-    # Priority 2: snapshot about the major version (e.g. "iOS 18")
-    for s in snaps:
-        text = s.get("clean_text", "")
-        if f"security content of iOS {major}" in text and f"iOS {major} and" in text:
-            bullets = _extract_bullets(text)
-            if bullets:
-                return bullets
+    bullets, url = _try(snaps, lambda t: f"security content of iOS {version}" in t)
+    if bullets:
+        return bullets, url
 
-    # Priority 3: any snapshot mentioning the major version
-    for s in snaps:
-        text = s.get("clean_text", "")
-        if f"iOS {major}" in text:
-            bullets = _extract_bullets(text)
-            if bullets:
-                return bullets
+    bullets, url = _try(snaps, lambda t: f"security content of iOS {major}" in t and f"iOS {major} and" in t)
+    if bullets:
+        return bullets, url
 
-    return []
+    bullets, url = _try(snaps, lambda t: f"iOS {major}" in t)
+    if bullets:
+        return bullets, url
 
-ios_bullets = load_ios_impact_bullets(CURRENT_IOS)
+    return [], ""
+
+import html as _html
+
+def _linkify_cves_stable(raw: str, base_url: str = "") -> str:
+    escaped = _html.escape(raw)
+    def _make_link(m):
+        cve = m.group(1)
+        href = f"{base_url}#{cve.lower()}" if base_url else f"https://nvd.nist.gov/vuln/detail/{cve}"
+        return (
+            f'<a href="{href}" target="_blank"'
+            f' style="color:#2563eb;font-weight:600;text-decoration:none;'
+            f'border-bottom:1px solid #bfdbfe;">{cve}</a>'
+        )
+    return re.sub(r'(CVE-\d{4}-\d{4,7})', _make_link, escaped)
+
+ios_bullets, ios_source_url = load_ios_impact_bullets(CURRENT_IOS)
 if ios_bullets:
-    bullets_html = "".join(
-        f'<li style="margin-bottom:.35rem;">{b}</li>' for b in ios_bullets
+    def _bullet_row(component: str, impact: str, cves: list) -> str:
+        badge = (
+            f'<span style="display:inline-block;background:#dbeafe;color:#1d4ed8;'
+            f'font-size:.65rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;'
+            f'padding:.15rem .45rem;border-radius:4px;margin-right:.5rem;'
+            f'white-space:nowrap;">{_html.escape(component)}</span>'
+            if component else ""
+        )
+        cve_links = " ".join(
+            f'<a href="{ios_source_url}#{c.lower()}" target="_blank"'
+            f' style="font-size:.7rem;color:#2563eb;font-weight:600;text-decoration:none;'
+            f'border-bottom:1px solid #bfdbfe;white-space:nowrap;">{c}</a>'
+            for c in cves
+        )
+        return (
+            f'<li style="margin-bottom:.6rem;display:flex;align-items:flex-start;gap:.3rem;">'
+            f'<span style="color:#2563eb;margin-top:.1rem;flex-shrink:0;">›</span>'
+            f'<span style="color:#1e3a5f;font-size:.82rem;line-height:1.6;">'
+            f'{badge}{_html.escape(impact)}'
+            f'{"&nbsp;&nbsp;" + cve_links if cve_links else ""}'
+            f'</span>'
+            f'</li>'
+        )
+    bullets_html = "".join(_bullet_row(c, i, v) for c, i, v in ios_bullets)
+    source_link = (
+        f'<a href="{ios_source_url}" target="_blank" '
+        f'style="color:#2563eb;font-size:.72rem;font-weight:500;text-decoration:none;'
+        f'border-bottom:1px solid #bfdbfe;">View Apple Security Release ↗</a>'
+        if ios_source_url else ""
     )
     st.markdown(f"""
-    <div style="background:#f8faff;border:1px solid #dbeafe;border-left:3px solid #2563eb;
-                border-radius:8px;padding:.75rem 1rem;margin-bottom:1rem;">
-        <span style="font-size:.7rem;font-weight:600;color:#2563eb;text-transform:uppercase;
-                     letter-spacing:.07em;">iOS {CURRENT_IOS} — Privacy &amp; API changes affecting signal collection</span>
-        <ul style="font-size:.82rem;color:#374151;line-height:1.65;margin:.5rem 0 0 0;
-                   padding-left:1.2rem;">{bullets_html}</ul>
+    <div style="background:linear-gradient(135deg,#eff6ff 0%,#f0f9ff 100%);
+                border:1px solid #bfdbfe;border-radius:12px;
+                padding:1rem 1.25rem 1rem 1.25rem;margin-bottom:1.25rem;
+                box-shadow:0 1px 4px rgba(37,99,235,.07);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem;">
+            <div style="display:flex;align-items:center;gap:.5rem;">
+                <span style="background:#2563eb;color:#fff;font-size:.65rem;font-weight:700;
+                             letter-spacing:.08em;text-transform:uppercase;
+                             padding:.2rem .55rem;border-radius:999px;">iOS {CURRENT_IOS}</span>
+                <span style="font-size:.78rem;font-weight:600;color:#1e40af;">
+                    Privacy &amp; API changes affecting signal collection
+                </span>
+            </div>
+            {source_link}
+        </div>
+        <ul style="font-size:.82rem;line-height:1.7;margin:.25rem 0 0 0;
+                   padding-left:0;list-style:none;">{bullets_html}</ul>
     </div>
     """, unsafe_allow_html=True)
 
@@ -472,10 +618,10 @@ with tab1:
         with _donut_col:
             st.markdown('<div class="sec">Risk Distribution</div>', unsafe_allow_html=True)
             donut = go.Figure(go.Pie(
-                labels=["High", "Medium", "Low", "No Impact"],
-                values=[high_n, medium_n, low_n, no_impact_n],
+                labels=["High", "Medium", "Low"],
+                values=[high_n, medium_n, low_n],
                 hole=0.62,
-                marker=dict(colors=["#dc2626","#d97706","#16a34a","#d1d5db"],
+                marker=dict(colors=["#dc2626","#d97706","#16a34a"],
                             line=dict(color="#ffffff", width=2)),
                 textinfo="percent",
                 textfont=dict(size=11, color="#ffffff", family="Inter"),
@@ -495,63 +641,146 @@ with tab1:
                     font=dict(size=11, color="#374151"),
                 ),
                 height=240,
+                clickmode="event+select",
             )
             donut_ev = st.plotly_chart(donut, use_container_width=True, config={"displayModeBar": False}, on_select="rerun", key="donut_chart")
             if donut_ev and donut_ev.selection.points:
                 lbl = donut_ev.selection.points[0].get("label")
-                if lbl:
+                if lbl and st.session_state.t1_filter.get("risk") != lbl:
                     st.session_state.t1_filter = {"type": "risk", "risk": lbl, "category": None}
+                    st.rerun()
 
         # ── Stacked bar: Risk breakdown per signal category (linked to donut) ──
+        _ftype = st.session_state.t1_filter.get("type")
         _active_risk = (
             st.session_state.t1_filter.get("risk")
-            if st.session_state.t1_filter.get("type") == "risk" else None
+            if _ftype in ("risk", "both") else None
         )
-        _stack_title = (
-            f'Risk Breakdown — <span style="color:{"#dc2626" if _active_risk=="High" else "#d97706" if _active_risk=="Medium" else "#16a34a"}">{_active_risk}</span> highlighted'
-            if _active_risk else "Risk Breakdown by Signal Category"
+        _active_cat = (
+            st.session_state.t1_filter.get("category")
+            if _ftype == "both" else None
         )
+        _risk_color = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a"}
+
+        if _active_risk and _active_cat:
+            _stack_title = (
+                f'Signal Category — <span style="color:{_risk_color.get(_active_risk,"#374151")}">'
+                f'{_active_cat} · {_active_risk}</span>'
+            )
+        elif _active_risk:
+            _stack_title = (
+                f'Signal Categories — <span style="color:{_risk_color.get(_active_risk,"#374151")}">'
+                f'{_active_risk} files only</span>'
+            )
+        else:
+            _stack_title = "Risk Breakdown by Signal Category"
         st.markdown(f'<div class="sec" style="margin-top:.5rem;">{_stack_title}</div>', unsafe_allow_html=True)
+
         if not df.empty:
-            _cat_order = df["Signal Category"].value_counts().index.tolist()
-            _full_palette  = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a", "No Impact": "#d1d5db"}
-            _faded_palette = {"High": "#fca5a5", "Medium": "#fcd34d", "Low": "#86efac", "No Impact": "#f3f4f6"}
             fig_stack = go.Figure()
-            for level in ["High", "Medium", "Low", "No Impact"]:
-                _counts = df[df["Effective Risk"] == level]["Signal Category"].value_counts()
-                _color = (
-                    _full_palette[level] if (not _active_risk or _active_risk == level)
-                    else _faded_palette[level]
-                )
+            if _active_risk:
+                # Filtered view: single bar per category for the selected risk level, highlight active cat
+                _filtered_df = df[df["Effective Risk"] == _active_risk]
+                _counts = _filtered_df["Signal Category"].value_counts().sort_values(ascending=True)
+                _cat_order = _counts.index.tolist()
+                _bar_colors = [
+                    _risk_color[_active_risk] if (not _active_cat or cat == _active_cat)
+                    else "#e5e7eb"
+                    for cat in _cat_order
+                ]
                 fig_stack.add_trace(go.Bar(
-                    name=level,
-                    x=[_counts.get(cat, 0) for cat in _cat_order],
+                    name=_active_risk,
+                    x=_counts.values.tolist(),
                     y=_cat_order,
                     orientation="h",
-                    marker=dict(color=_color, line=dict(width=0)),
-                    hovertemplate=f"<b>%{{y}}</b><br>{level}: %{{x}} file(s)<extra></extra>",
+                    marker=dict(color=_bar_colors, line=dict(width=0)),
+                    hovertemplate="<b>%{y}</b><br>" + _active_risk + ": %{x} file(s)<extra></extra>",
+                    text=_counts.values.tolist(),
+                    textposition="outside",
+                    textfont=dict(size=11, color="#374151"),
                 ))
-            fig_stack.update_layout(
-                **PLOTLY_BASE,
-                barmode="stack",
-                xaxis=dict(visible=False),
-                yaxis=dict(tickfont=dict(size=11, color="#374151")),
-                height=320,
-                bargap=0.3,
-                legend=dict(
-                    orientation="h", x=0.5, xanchor="center", y=-0.04,
-                    font=dict(size=11, color="#374151"),
-                ),
-                showlegend=True,
-            )
+                fig_stack.update_layout(
+                    **PLOTLY_BASE,
+                    barmode="stack",
+                    xaxis=dict(visible=False),
+                    yaxis=dict(tickfont=dict(size=11, color="#374151")),
+                    height=max(240, len(_cat_order) * 38),
+                    bargap=0.35,
+                    showlegend=False,
+                )
+            else:
+                # Default view: stacked bar for all levels
+                _cat_order = df["Signal Category"].value_counts().index.tolist()
+                _full_palette = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a", "No Impact": "#d1d5db"}
+                for level in ["High", "Medium", "Low", "No Impact"]:
+                    _counts = df[df["Effective Risk"] == level]["Signal Category"].value_counts()
+                    fig_stack.add_trace(go.Bar(
+                        name=level,
+                        x=[_counts.get(cat, 0) for cat in _cat_order],
+                        y=_cat_order,
+                        orientation="h",
+                        marker=dict(color=_full_palette[level], line=dict(width=0)),
+                        hovertemplate=f"<b>%{{y}}</b><br>{level}: %{{x}} file(s)<extra></extra>",
+                    ))
+                fig_stack.update_layout(
+                    **PLOTLY_BASE,
+                    barmode="stack",
+                    xaxis=dict(visible=False),
+                    yaxis=dict(tickfont=dict(size=11, color="#374151")),
+                    height=320,
+                    bargap=0.3,
+                    legend=dict(
+                        orientation="h", x=0.5, xanchor="center", y=-0.04,
+                        font=dict(size=11, color="#374151"),
+                    ),
+                    showlegend=True,
+                )
             stack_ev = st.plotly_chart(fig_stack, use_container_width=True, config={"displayModeBar": False}, on_select="rerun", key="stack_chart")
             if stack_ev and stack_ev.selection.points:
                 pt = stack_ev.selection.points[0]
                 cat_val = pt.get("y")
-                trace_idx = pt.get("curveNumber", 0)
-                risk_val = ["High", "Medium", "Low", "No Impact"][trace_idx]
-                if cat_val:
+                curve = pt.get("curveNumber", 0)
+                risk_val = _active_risk if _active_risk else ["High", "Medium", "Low", "No Impact"][min(curve, 3)]
+                if cat_val and (
+                    st.session_state.t1_filter.get("category") != cat_val
+                    or st.session_state.t1_filter.get("risk") != risk_val
+                ):
                     st.session_state.t1_filter = {"type": "both", "risk": risk_val, "category": cat_val}
+                    st.rerun()
+
+        # ── File list: shown when a category is selected via stacked bar ──────
+        if _active_risk and _active_cat:
+            _risk_color2 = {"High": "#dc2626", "Medium": "#d97706", "Low": "#16a34a"}
+            _color = _risk_color2.get(_active_risk, "#6b7280")
+            _matched = df[
+                (df["Effective Risk"] == _active_risk) &
+                (df["Signal Category"] == _active_cat)
+            ][["Swift File", "Feature", "Effective Risk", "Risk Type"]].reset_index(drop=True)
+
+            st.markdown(
+                f'<div class="sec" style="margin-top:.75rem;">'
+                f'Files — <span style="color:{_color}">{_active_cat} · {_active_risk}</span>'
+                f'&nbsp;<span style="font-size:.72rem;color:#6b7280;font-weight:400;">'
+                f'({len(_matched)} file{"s" if len(_matched) != 1 else ""})</span>'
+                f'&nbsp;&nbsp;<span style="font-size:.72rem;color:#9ca3af;cursor:pointer;" '
+                f'onclick="void(0)">— click a row in the File Risk Table to inspect</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            for _, row in _matched.iterrows():
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:.6rem;padding:.45rem .6rem;'
+                    f'border:1px solid #e5e7eb;border-radius:6px;margin-bottom:.3rem;background:#fff;">'
+                    f'<span style="background:{_color}22;color:{_color};font-size:.65rem;font-weight:700;'
+                    f'padding:.15rem .4rem;border-radius:4px;white-space:nowrap;">{_active_risk}</span>'
+                    f'<span style="font-size:.8rem;color:#111827;font-weight:500;font-family:monospace;">{row["Swift File"]}</span>'
+                    f'<span style="font-size:.75rem;color:#6b7280;margin-left:auto;">{row["Feature"]}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+            if st.button("✕ Clear filter", key="clear_filter_btn"):
+                st.session_state.t1_filter = {"type": None, "risk": None, "category": None}
+                st.rerun()
 
     # ── Right column ──────────────────────────────────────────────────────────
     with right:
@@ -591,20 +820,22 @@ with tab1:
     # ── Drill-down panel (shown when a chart element is clicked) ──────────────
     f = st.session_state.t1_filter
     if f["type"]:
-        st.markdown("<hr style='border:none;border-top:1px solid #e5e7eb;margin:1.5rem 0 1rem 0;'>", unsafe_allow_html=True)
+        _risk_bg   = {"High": "#fef2f2", "Medium": "#fffbeb", "Low": "#f0fdf4", "No Impact": "#f9fafb"}.get(f.get("risk",""), "#f9fafb")
+        _risk_border = {"High": "#fecaca", "Medium": "#fde68a", "Low": "#bbf7d0", "No Impact": "#e5e7eb"}.get(f.get("risk",""), "#e5e7eb")
+        _risk_col  = {"High": "#b91c1c",  "Medium": "#92400e", "Low": "#15803d", "No Impact": "#6b7280"}.get(f.get("risk",""), "#374151")
 
         if f["type"] == "risk":
             filtered = [r for r in records if r["Effective Risk"] == f["risk"]]
-            title = f"{f['risk']} Files"
-            badge_color = {"High": "#fef2f2", "Medium": "#fffbeb", "Low": "#f0fdf4", "No Impact": "#f9fafb"}.get(f["risk"], "#f9fafb")
+            title = f"{f['risk']} Risk — All Files"
+            badge_color = _risk_bg
         elif f["type"] == "category":
             filtered = [r for r in records if r["Signal Category"] == f["category"]]
             title = f"{f['category']} — All Files"
             badge_color = "#eff6ff"
         elif f["type"] == "both":
             filtered = [r for r in records if r["Signal Category"] == f["category"] and r["Effective Risk"] == f["risk"]]
-            title = f"{f['category']}  ·  {f['risk']}"
-            badge_color = {"High": "#fef2f2", "Medium": "#fffbeb", "Low": "#f0fdf4", "No Impact": "#f9fafb"}.get(f["risk"], "#f9fafb")
+            title = f"{f['category']}  ·  {f['risk']} Risk"
+            badge_color = _risk_bg
         elif f["type"] == "file":
             filtered = [r for r in records if r["Swift File"] == f.get("file")]
             title = f["file"]
@@ -614,9 +845,16 @@ with tab1:
             title = ""
             badge_color = "#f9fafb"
 
+        st.markdown(
+            f"<div id='drill-anchor' style='border:1.5px solid {_risk_border};"
+            f"border-radius:10px;padding:.6rem 1rem;background:{_risk_bg};"
+            f"margin:1.5rem 0 .75rem 0;display:flex;justify-content:space-between;align-items:center;'>"
+            f"<span style='font-size:.82rem;font-weight:700;color:{_risk_col};'>{title}"
+            f"  <span style='font-size:.78rem;font-weight:400;color:#6b7280;'>— {len(filtered)} file(s)</span></span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
         hd_col, btn_col = st.columns([5, 1])
-        with hd_col:
-            st.markdown(f'<div class="sec">{title} <span style="font-size:.78rem;font-weight:400;color:#6b7280;">— {len(filtered)} file(s)</span></div>', unsafe_allow_html=True)
         with btn_col:
             if st.button("✕ Clear", key="t1_clear"):
                 st.session_state.t1_filter = {"type": None, "risk": None, "category": None}
@@ -809,7 +1047,7 @@ with tab3:
     else:
         f1, f2 = st.columns([1, 1])
         with f1:
-            sel_risk = st.selectbox("Filter by risk level", ["All","High","Medium","Low","No Impact"], key="t3r")
+            sel_risk = st.selectbox("Filter by risk level", ["All","High","Medium","Low"], key="t3r")
         with f2:
             sel_feat = st.selectbox("Filter by feature",
                 ["All"] + sorted(df["Feature"].dropna().unique().tolist()), key="t3f")
@@ -882,6 +1120,38 @@ with tab3:
                         </div>
                     </div>""", unsafe_allow_html=True)
 
+                    # ── Rationale + Recommended Action (LLM-generated, High/Medium only) ──
+                    _rationale = row.get("rationale", "")
+                    _action    = row.get("recommended_action", "")
+                    _cve       = row.get("triggering_cve", "")
+                    if _rationale and eff_level in ("High", "Medium"):
+                        _action_color = "#b91c1c" if eff_level == "High" else "#92400e"
+                        _action_bg    = "#fef2f2" if eff_level == "High" else "#fffbeb"
+                        _action_border= "#fecaca" if eff_level == "High" else "#fde68a"
+                        _cve_html = (
+                            f'<span style="font-size:.68rem;font-weight:700;background:#dbeafe;'
+                            f'color:#1d4ed8;border-radius:4px;padding:.1rem .4rem;margin-left:.5rem;">'
+                            f'{_cve}</span>'
+                            if _cve else ""
+                        )
+                        st.markdown(f"""
+                        <div style="background:#f8fafc;border:1px solid #e2e8f0;
+                                    border-radius:8px;padding:.65rem .85rem;margin-bottom:.85rem;">
+                            <div style="font-size:.68rem;font-weight:600;color:#6b7280;
+                                        text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem;">
+                                Why this is at risk {_cve_html}
+                            </div>
+                            <div style="font-size:.8rem;color:#1e3a5f;line-height:1.6;">
+                                {_html.escape(_rationale)}
+                            </div>
+                            <div style="margin-top:.5rem;background:{_action_bg};border:1px solid {_action_border};
+                                        border-radius:5px;padding:.3rem .6rem;display:inline-block;">
+                                <span style="font-size:.72rem;font-weight:600;color:{_action_color};">
+                                    ⚡ {_html.escape(_action)}
+                                </span>
+                            </div>
+                        </div>""", unsafe_allow_html=True)
+
                     # ── Classification confidence (intrinsic signal sensitivity)
                     st.markdown("**Signal Sensitivity** *(zero-shot)*")
                     level_colors = {"High": "#ef4444", "Medium": "#f59e0b", "Low": "#22c55e"}
@@ -902,11 +1172,27 @@ with tab3:
                     # ── Related Apple bulletins
                     st.markdown("**Related Apple Bulletins**")
                     if bulletins:
+                        import html as _html
+
+                        def _linkify_cves(raw: str, base_url: str = "") -> str:
+                            escaped = _html.escape(raw)
+                            def _make_link(m):
+                                cve = m.group(1)
+                                # Deep-link to the CVE paragraph on the Apple bulletin page
+                                href = f"{base_url}#{cve.lower()}" if base_url else f"https://nvd.nist.gov/vuln/detail/{cve}"
+                                return (
+                                    f'<a href="{href}" target="_blank"'
+                                    f' style="color:#2563eb;font-weight:600;text-decoration:none;'
+                                    f'border-bottom:1px solid #bfdbfe;">{cve}</a>'
+                                )
+                            return re.sub(r'(CVE-\d{4}-\d{4,7})', _make_link, escaped)
+
                         for b in bulletins:
                             sim = b.get("cosine_similarity", b.get("similarity", 0.0))
-                            full_text = (b.get("chunk_text") or b.get("content") or "")
                             chunk_id = b.get("snapshot_chunk_id")
                             url = source_map.get(chunk_id, "")
+                            raw_text = b.get("chunk_text") or b.get("content") or ""
+                            full_text = _linkify_cves(raw_text, base_url=url)
                             link_html = (
                                 f'<a href="{url}" target="_blank" style="font-size:.75rem;'
                                 f'color:#2563eb;text-decoration:none;font-weight:500;">↗ View source</a>'
