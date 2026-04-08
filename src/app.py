@@ -1081,9 +1081,12 @@ with tab3:
                     st.markdown(row["Summary"])
 
                     # ── Raw Swift source (traceability: original source code)
-                    st.markdown("**Raw Source**")
                     raw = get_raw_source(row["file_path"])
-                    st.code(raw, language="swift")
+                    if not raw.startswith("(source file not found"):
+                        st.markdown("**Raw Source**")
+                        st.code(raw, language="swift")
+                    else:
+                        st.caption("Raw source not available in this environment.")
 
                 with col_r:
                     # ── Load bulletins first so effective risk can be computed
