@@ -111,7 +111,7 @@ class SentinelAgent(BaseAgent):
         effective_risk = zs_level if qualified else "No Impact"
         top_preview = ""
         if ranked:
-            top_preview = (ranked[0].get("chunk_text") or "")[:200]
+            top_preview = (ranked[0].get("chunk_text") or "")[:600]
 
         # ── LLM rationale (only for High / Medium — keeps costs low) ──────────
         triggering_cve = _extract_cve(top_preview)

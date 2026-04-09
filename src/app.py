@@ -1099,11 +1099,34 @@ with tab3:
                     _preview = _triage.get("top_bulletin_preview", "")
                     if _preview:
                         st.markdown("**What Apple Said**")
+                        # Split on bulletin field keywords first, then escape each part
+                        _parts = re.split(r'(Impact:|Description:|CVE-\d{4}-\d{4,7}|Available for:|Entry added)', _preview)
+                        _lines = []
+                        i = 0
+                        while i < len(_parts):
+                            part = _parts[i].strip()
+                            if not part:
+                                i += 1
+                                continue
+                            if part in ("Impact:", "Description:", "Available for:", "Entry added") or re.match(r'CVE-\d{4}-\d{4,7}', part):
+                                label = _html.escape(part)
+                                value = _html.escape(_parts[i+1].strip()) if i+1 < len(_parts) else ""
+                                _lines.append(
+                                    f'<div style="margin-bottom:.4rem;">'
+                                    f'<span style="font-size:.65rem;font-weight:700;color:#64748b;'
+                                    f'text-transform:uppercase;letter-spacing:.05em;">{label}</span>'
+                                    f'<span style="color:#1e3a5f;"> {value}</span>'
+                                    f'</div>'
+                                )
+                                i += 2
+                            else:
+                                _lines.append(f'<div style="color:#1e3a5f;margin-bottom:.4rem;">{_html.escape(part)}</div>')
+                                i += 1
                         st.markdown(
                             f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
                             f'border-left:3px solid #2563eb;border-radius:6px;'
-                            f'padding:.65rem .9rem;font-size:.8rem;color:#1e3a5f;line-height:1.65;">'
-                            f'{_html.escape(_preview)}'
+                            f'padding:.75rem 1rem;font-size:.8rem;line-height:1.7;max-height:220px;overflow-y:auto;">'
+                            f'{"".join(_lines)}'
                             f'</div>',
                             unsafe_allow_html=True
                         )
