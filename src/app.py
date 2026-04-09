@@ -273,6 +273,18 @@ def load_code_knowledge():
     res = sb.table("code_knowledge").select("file_path, feature, content").execute()
     return res.data or []
 
+@st.cache_data(ttl=300)
+def load_triage_results() -> dict:
+    """Returns {file_name: row} from triage_results for quick lookup."""
+    sb = get_supabase()
+    rows = (
+        sb.table("triage_results")
+        .select("file_name, top_bulletin_preview, triggering_cve, rationale, recommended_action")
+        .execute()
+        .data or []
+    )
+    return {r["file_name"]: r for r in rows}
+
 BETA_IOS = "26.4 beta 3"
 BETA_IOS_URL = "https://support.apple.com/en-us/126792"
 
@@ -306,6 +318,7 @@ def load_stable_ios_version() -> str:
 # ── load data ─────────────────────────────────────────────────────────────────
 with st.spinner("Loading data from Supabase…"):
     code_data = load_code_knowledge()
+    triage_map = load_triage_results()
     CURRENT_IOS = load_stable_ios_version()
 
 BULLETIN_MIN_SIM = 0.55
@@ -1080,13 +1093,22 @@ with tab3:
                     st.markdown("**Summary**")
                     st.markdown(row["Summary"])
 
-                    # ── Raw Swift source (traceability: original source code)
-                    raw = get_raw_source(row["file_path"])
-                    if not raw.startswith("(source file not found"):
-                        st.markdown("**Raw Source**")
-                        st.code(raw, language="swift")
+                    # ── Top Bulletin Preview (what Apple said that triggered this verdict)
+                    _file_name = row.get("Swift File", "").split("/")[-1]
+                    _triage = triage_map.get(_file_name, {})
+                    _preview = _triage.get("top_bulletin_preview", "")
+                    if _preview:
+                        st.markdown("**What Apple Said**")
+                        st.markdown(
+                            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
+                            f'border-left:3px solid #2563eb;border-radius:6px;'
+                            f'padding:.65rem .9rem;font-size:.8rem;color:#1e3a5f;line-height:1.65;">'
+                            f'{_html.escape(_preview)}'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
                     else:
-                        st.caption("Raw source not available in this environment.")
+                        st.caption("No matching Apple bulletin text available.")
 
                 with col_r:
                     # ── Load bulletins first so effective risk can be computed
