@@ -323,29 +323,38 @@ with st.spinner("Loading data from Supabase…"):
 
 BULLETIN_MIN_SIM = 0.55
 
-records = []
-for item in code_data:
-    content = item.get("content", "")
-    lvl, rtype, reason, zs_scores = classify_risk_zs_with_scores(content)
-    # Compute effective risk: cross-reference bulletin coverage (cached after first run)
-    raw_buls = get_related_bulletins(content)
-    has_impact = any(
-        b.get("cosine_similarity", b.get("similarity", 0.0)) >= BULLETIN_MIN_SIM
-        for b in raw_buls
-    )
-    effective_risk = lvl if has_impact else "No Impact"
-    records.append({
-        "Swift File":      shorten(item.get("file_path", "")),
-        "file_path":       item.get("file_path", ""),
-        "Feature":         item.get("feature", ""),
-        "Risk Level":      lvl,            # intrinsic zero-shot sensitivity
-        "Effective Risk":  effective_risk, # bulletin-backed actual impact
-        "Risk Type":       rtype,
-        "Risk Reason":     reason,
-        "Signal Category": signal_category(content),
-        "Summary":         content,
-        "zs_scores":       zs_scores,
-    })
+@st.cache_data(ttl=3600)
+def build_records(code_data_json: str) -> list:
+    """Build risk records from code_knowledge. Cached to avoid re-running
+    classify_risk_zs_with_scores + get_related_bulletins on every Streamlit rerun."""
+    import json
+    items = json.loads(code_data_json)
+    records = []
+    for item in items:
+        content = item.get("content", "")
+        lvl, rtype, reason, zs_scores = classify_risk_zs_with_scores(content)
+        raw_buls = get_related_bulletins(content)
+        has_impact = any(
+            b.get("cosine_similarity", b.get("similarity", 0.0)) >= BULLETIN_MIN_SIM
+            for b in raw_buls
+        )
+        effective_risk = lvl if has_impact else "No Impact"
+        records.append({
+            "Swift File":      shorten(item.get("file_path", "")),
+            "file_path":       item.get("file_path", ""),
+            "Feature":         item.get("feature", ""),
+            "Risk Level":      lvl,
+            "Effective Risk":  effective_risk,
+            "Risk Type":       rtype,
+            "Risk Reason":     reason,
+            "Signal Category": signal_category(content),
+            "Summary":         content,
+            "zs_scores":       zs_scores,
+        })
+    return records
+
+import json as _json
+records = build_records(_json.dumps(code_data))
 
 df = pd.DataFrame(records) if records else pd.DataFrame(
     columns=["Swift File","Feature","Risk Level","Effective Risk","Risk Type","Risk Reason","Signal Category","Summary"])
