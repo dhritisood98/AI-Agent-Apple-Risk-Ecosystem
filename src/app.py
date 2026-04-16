@@ -137,9 +137,65 @@ div[data-testid="stTabs"] button { font-size: .82rem !important; font-weight: 50
 div[data-testid="stTabs"] button[aria-selected="true"] { color: #1d4ed8 !important; font-weight: 600 !important; }
 
 hr.div { border: none; border-top: 1px solid #f3f4f6; margin: 1.4rem 0; }
+
+/* ── institution banner ── */
+.inst-banner {
+    background: #002855;
+    border-radius: 12px;
+    padding: 1.4rem 2rem;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 1.25rem;
+}
+.inst-logo-left {
+    display: flex; align-items: center; justify-content: flex-start;
+}
+.inst-logo-right {
+    display: flex; align-items: center; justify-content: flex-end;
+}
+.inst-logo-left img {
+    height: 100px; object-fit: contain;
+    background: transparent; padding: 6px 14px;
+}
+.inst-logo-right img {
+    height: 100px; object-fit: contain;
+    background: #fff; border-radius: 8px; padding: 6px 14px;
+}
+.inst-center {
+    display: flex; flex-direction: column; align-items: center; gap: .5rem; text-align: center;
+}
+.inst-title {
+    font-size: 1.05rem; font-weight: 700; color: #ffffff;
+    letter-spacing: -.01em; line-height: 1.4;
+}
+.inst-team {
+    font-size: .78rem; color: #93c5fd; font-weight: 500;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: .35rem;
+}
+.inst-team span {
+    background: rgba(255,255,255,.12);
+    border-radius: 999px;
+    padding: .15rem .65rem;
+    white-space: nowrap;
+}
 </style>
 """, unsafe_allow_html=True)
 
+
+import base64
+from pathlib import Path
+
+def _img_b64(path: str) -> str | None:
+    """Return a base64 data-URI for a local image file, or None if missing."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    ext = p.suffix.lstrip(".").lower()
+    mime = {"svg": "image/svg+xml", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, f"image/{ext}")
+    data = base64.b64encode(p.read_bytes()).decode()
+    return f"data:{mime};base64,{data}"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -367,6 +423,31 @@ total_n     = len(df)
 
 # Weighted risk score 0–100 (No Impact counts as 0)
 risk_score = round((high_n * 100 + medium_n * 50 + low_n * 10) / max(total_n, 1))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INSTITUTION BANNER
+# ═══════════════════════════════════════════════════════════════════════════════
+_uic_b64  = _img_b64("src/assets/uic_logo.png")    or _img_b64("src/assets/uic_logo.svg")
+_tu_b64   = _img_b64("src/assets/transunion_logo.png") or _img_b64("src/assets/transunion_logo.svg")
+
+# ── team members ── add / remove names here ──
+_team = ["Akshitha C","Dhriti Sood", "Hazel Lin", "Kashish Tandon","Parth Drona"]
+_team_html = " ".join(f"<span>{n}</span>" for n in _team)
+
+_uic_img  = f'<img src="{_uic_b64}" alt="UIC">'        if _uic_b64  else ""
+_tu_img   = f'<img src="{_tu_b64}" alt="TransUnion">'  if _tu_b64   else ""
+
+st.markdown(f"""
+<div class="inst-banner">
+    <div class="inst-logo-left">{_uic_img}</div>
+    <div class="inst-center">
+        <div class="inst-title">AI Agentic System:<br>For Monitoring Apple Digital Risk Ecosystem</div>
+        <div class="inst-team">{_team_html}</div>
+    </div>
+    <div class="inst-logo-right">{_tu_img}</div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -727,6 +808,7 @@ with tab1:
                     text=_counts.values.tolist(),
                     textposition="outside",
                     textfont=dict(size=11, color="#374151"),
+                    customdata=[[_active_risk]] * len(_cat_order),
                 ))
                 fig_stack.update_layout(
                     **PLOTLY_BASE,
@@ -750,6 +832,7 @@ with tab1:
                         orientation="h",
                         marker=dict(color=_full_palette[level], line=dict(width=0)),
                         hovertemplate=f"<b>%{{y}}</b><br>{level}: %{{x}} file(s)<extra></extra>",
+                        customdata=[[level]] * len(_cat_order),
                     ))
                 fig_stack.update_layout(
                     **PLOTLY_BASE,
@@ -767,9 +850,9 @@ with tab1:
             stack_ev = st.plotly_chart(fig_stack, use_container_width=True, config={"displayModeBar": False}, on_select="rerun", key="stack_chart")
             if stack_ev and stack_ev.selection.points:
                 pt = stack_ev.selection.points[0]
-                cat_val = pt.get("y")
-                curve = pt.get("curveNumber", 0)
-                risk_val = _active_risk if _active_risk else ["High", "Medium", "Low", "No Impact"][min(curve, 3)]
+                cat_val = pt.get("y") or pt.get("label")
+                _cd = pt.get("customdata")
+                risk_val = (_cd[0] if _cd else None) or _active_risk or "High"
                 if cat_val and (
                     st.session_state.t1_filter.get("category") != cat_val
                     or st.session_state.t1_filter.get("risk") != risk_val
@@ -974,17 +1057,19 @@ with tab2:
         with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "📱"):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and msg.get("sources"):
-                with st.expander(f"📎  {len(msg['sources'])} supporting files retrieved", expanded=False):
-                    src_c1, src_c2, src_c3 = st.columns(3)
-                    for j, src in enumerate(msg["sources"]):
-                        with [src_c1, src_c2, src_c3][j % 3]:
-                            st.markdown(f"""
-                            <div class="{fc_cls(src['Risk Level'])}">
-                                {rb_html(src['Risk Level'])}
-                                <div class="fc-name" style="margin-top:.3rem;">{src['Swift File']}</div>
-                                <div class="fc-meta">{src['Feature']} · {src['Signal Category']}</div>
-                                <div class="fc-body">{src['Summary'][:160]}…</div>
-                            </div>""", unsafe_allow_html=True)
+                _risk_icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
+                st.caption(f"📎 {len(msg['sources'])} supporting file{'s' if len(msg['sources']) != 1 else ''}")
+                for src in msg["sources"]:
+                    icon = _risk_icon.get(src["Risk Level"], "⚪")
+                    with st.expander(f"{icon} {src['Swift File']} · {src['Risk Level']}"):
+                        sim = src.get("cosine_similarity", 0)
+                        st.markdown(
+                            f"**Feature:** {src['Feature']}  \n"
+                            f"**Signal:** {src['Signal Category']}"
+                            + (f"  \n**Similarity:** {sim:.3f}" if sim else "")
+                        )
+                        st.markdown("---")
+                        st.markdown(src["Summary"])
 
     user_input = st.chat_input("Ask about iOS risk, signal changes, or Swift files…")
     query = user_input
@@ -1004,7 +1089,7 @@ with tab2:
 
                 query_vec = embedder.embed_query(query)
                 raw_results = retriever.retrieve_code_knowledge_with_rerank(
-                    query_vec, k=6, fetch_k=20
+                    query_vec, k=4, fetch_k=20
                 )
 
                 # Map retrieved results to the same shape as `records` for display
@@ -1044,25 +1129,28 @@ with tab2:
 
                 st.markdown(response_text)
 
-                with st.expander(f"📎  {len(sources)} supporting files retrieved", expanded=False):
-                    src_c1, src_c2, src_c3 = st.columns(3)
-                    for j, src in enumerate(sources):
-                        with [src_c1, src_c2, src_c3][j % 3]:
-                            st.markdown(f"""
-                            <div class="{fc_cls(src['Risk Level'])}">
-                                {rb_html(src['Risk Level'])}
-                                <div class="fc-name" style="margin-top:.3rem;">{src['Swift File']}</div>
-                                <div class="fc-meta">{src['Feature']} · {src['Signal Category']}</div>
-                                <div class="fc-body" style="margin-top:.3rem;">{src['Summary'][:160]}…</div>
-                                <div class="fc-meta" style="margin-top:.3rem;color:#6b7280;">
-                                    similarity: {src['cosine_similarity']:.3f}
-                                </div>
-                            </div>""", unsafe_allow_html=True)
+                # Only show files actually mentioned in the answer; fall back to top 3 by similarity
+                mentioned = [s for s in sources if s["Swift File"] in response_text]
+                display_sources = mentioned[:3] if mentioned else sources[:3]
+
+                if display_sources:
+                    _risk_icon = {"High": "🔴", "Medium": "🟡", "Low": "🟢"}
+                    st.caption(f"📎 {len(display_sources)} supporting file{'s' if len(display_sources) != 1 else ''}")
+                    for src in display_sources:
+                        icon = _risk_icon.get(src["Risk Level"], "⚪")
+                        with st.expander(f"{icon} {src['Swift File']} · {src['Risk Level']}"):
+                            st.markdown(
+                                f"**Feature:** {src['Feature']}  \n"
+                                f"**Signal:** {src['Signal Category']}  \n"
+                                f"**Similarity:** {src['cosine_similarity']:.3f}"
+                            )
+                            st.markdown("---")
+                            st.markdown(src["Summary"])
 
         st.session_state.chat_history.append({
             "role": "assistant",
             "content": response_text,
-            "sources": sources,
+            "sources": display_sources,
         })
         st.session_state.chat_context.append({"role": "assistant", "content": response_text})
 
