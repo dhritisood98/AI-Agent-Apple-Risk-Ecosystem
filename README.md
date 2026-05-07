@@ -1,6 +1,14 @@
 # iOS Risk Sentinel
 
-Built by **Dhriti Sood** — UIC College of Business Administration, in partnership with **TransUnion**.
+## Group Members
+
+- **Dhriti Sood** — LinkedIn: <https://www.linkedin.com/in/dhriti-sood/>`
+- **Kashish Tandon** — LinkedIn: <https://www.linkedin.com/in/ktandon18/>`
+- **Hazel Lin** — LinkedIn: <http://www.linkedin.com/in/linhazelin/>`
+- **Parth Drona**
+- **Akshitha Chinthareddy** - LinkedIn: <https://www.linkedin.com/in/akshitha-ch/>`
+- 
+
 
 ---
 
