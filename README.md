@@ -6,7 +6,8 @@
 - **Kashish Tandon** — LinkedIn: `<https://www.linkedin.com/in/ktandon18/>`
 - **Hazel Lin** — LinkedIn: `<http://www.linkedin.com/in/linhazelin/>`
 - **Parth Drona**
-- **Akshitha Chinthareddy** """
+- **Akshitha Chinthareddy** - LinkedIn: `<https://www.linkedin.com/in/akshitha-ch/>`
+- 
 
 ---
 
