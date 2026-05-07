@@ -7,7 +7,6 @@
 - **Hazel Lin** — LinkedIn: <http://www.linkedin.com/in/linhazelin/>`
 - **Parth Drona** - LinkedIn: <https://www.linkedin.com/in/parth-drona/>`
 - **Akshitha Chinthareddy** - LinkedIn: <https://www.linkedin.com/in/akshitha-ch/>`
-- 
 
 
 ---
