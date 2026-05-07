@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from supabase import create_client
+from src.similarity import rerank_by_cosine
 
 
 class Retriever:
@@ -72,3 +73,23 @@ class Retriever:
             query_embedding=query_embedding,
             k=k,
         )
+
+    def retrieve_and_rerank(
+        self,
+        query_embedding: List[float],
+        k: int = 5,
+        fetch_k: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch fetch_k bulletin candidates then re-rank top-k by cosine similarity."""
+        candidates = self.retrieve(query_embedding, k=fetch_k)
+        return rerank_by_cosine(query_embedding, candidates)[:k]
+
+    def retrieve_code_knowledge_with_rerank(
+        self,
+        query_embedding: List[float],
+        k: int = 5,
+        fetch_k: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch fetch_k code-knowledge candidates then re-rank top-k by cosine similarity."""
+        candidates = self.retrieve_code_knowledge(query_embedding, k=fetch_k)
+        return rerank_by_cosine(query_embedding, candidates)[:k]
