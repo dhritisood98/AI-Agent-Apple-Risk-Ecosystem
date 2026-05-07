@@ -287,7 +287,4 @@ It would be more accurate but too slow for this use case. Cross-encoders need on
 
 ---
 
-## Team
 
-**UIC — College of Business Administration**
-Dhriti Sood · In partnership with TransUnion
