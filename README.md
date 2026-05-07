@@ -5,9 +5,8 @@
 - **Dhriti Sood** — LinkedIn: <https://www.linkedin.com/in/dhriti-sood/>`
 - **Kashish Tandon** — LinkedIn: <https://www.linkedin.com/in/ktandon18/>`
 - **Hazel Lin** — LinkedIn: <http://www.linkedin.com/in/linhazelin/>`
-- **Parth Drona**
+- **Parth Drona** - LinkedIn: <https://www.linkedin.com/in/parth-drona/>`
 - **Akshitha Chinthareddy** - LinkedIn: <https://www.linkedin.com/in/akshitha-ch/>`
-- 
 
 
 ---
