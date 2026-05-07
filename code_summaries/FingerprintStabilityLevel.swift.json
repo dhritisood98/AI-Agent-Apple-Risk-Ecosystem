@@ -1,0 +1,5 @@
+{
+  "file_role": "Hashing Logic",
+  "content_summary": "This file defines an enumeration called FingerprintStabilityLevel, which represents different stability levels for computing a device fingerprint. The levels are unique, optimal, and stable, each with a corresponding raw value. The enum also conforms to the Comparable protocol, allowing stability levels to be compared.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing a way to configure the stability level of the fingerprint. The chosen stability level determines which signals are included in the fingerprint computation, which in turn affects the accuracy and uniqueness of the resulting fingerprint. For example, a higher stability level (e.g., unique) may include more signals, resulting in a more accurate fingerprint, while a lower stability level (e.g., stable) may include fewer signals, resulting in a more stable fingerprint over time."
+}

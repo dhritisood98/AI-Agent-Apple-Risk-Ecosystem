@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides carrier information for iOS devices. It checks if the CoreTelephony framework can be imported and defines a protocol CarrierInfoProviding with properties mobileCountryCode and mobileNetworkCode. If the device is running on iOS, it extends the CTCarrier class to conform to the CarrierInfoProviding protocol.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing carrier information, specifically the mobile country code and mobile network code. This information can be used to identify the device's cellular network provider and location, which can be useful in distinguishing between devices."
+}

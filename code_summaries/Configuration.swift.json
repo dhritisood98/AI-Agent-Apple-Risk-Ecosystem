@@ -1,0 +1,5 @@
+{
+  "file_role": "Hashing Logic",
+  "content_summary": "This file defines the configuration and hashing logic for the FingerprintJS library in iOS Swift. It includes an enumeration of available fingerprinting algorithms and a configuration struct that allows users to specify the version, stability level, and algorithm for computing the fingerprint. The configuration struct also provides a hash function based on the chosen algorithm.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing the hashing logic that is used to compute the fingerprint. The chosen algorithm (SHA256 or custom) is used to hash the collected data, resulting in a unique fingerprint that can be used to identify the device."
+}

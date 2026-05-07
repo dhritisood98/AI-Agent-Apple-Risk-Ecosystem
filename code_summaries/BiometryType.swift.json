@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This file provides an enumeration of biometric authentication types supported by a device, along with a custom initializer to convert from LABiometryType. It also includes a custom string description for each biometric type.",
+  "fingerprint_contribution": "This file contributes to the device fingerprint by providing information about the type of biometric authentication supported by the device. This information can be used to uniquely identify a device and distinguish it from others."
+}

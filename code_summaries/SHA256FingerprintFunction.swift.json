@@ -1,0 +1,5 @@
+{
+  "file_role": "Hashing Logic",
+  "content_summary": "This file implements a hashing function using SHA-256 algorithm. It provides two different implementations: one using CryptoKit (available on iOS 13.0 and later) and another using CommonCrypto (for earlier iOS versions). The function takes input data, computes the SHA-256 hash, and returns the result as a hexadecimal string.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing a hashing function that can be used to hash various device attributes, such as browser properties, screen resolution, or other identifying features. The resulting hash values can be combined with other hashed attributes to create a unique device fingerprint."
+}

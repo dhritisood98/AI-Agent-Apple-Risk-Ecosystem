@@ -1,0 +1,5 @@
+{
+  "file_role": "Data Provider",
+  "content_summary": "This Swift file provides information about the cellular service of an iOS device. It imports the CoreTelephony framework, which is used to access the device's cellular network information. The file defines a protocol called CellularServiceInfoProviding, which has two properties: cellularProviders and radioAccessTechnologies. These properties are used to retrieve information about the device's cellular providers and radio access technologies, respectively. The file also extends the CTTelephonyNetworkInfo class to conform to the CellularServiceInfoProviding protocol, allowing it to provide the necessary information.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing information about the device's cellular service, including the cellular providers and radio access technologies. This information can be used to uniquely identify the device and distinguish it from other devices. The cellular service information can also be used in combination with other device attributes to create a more comprehensive device fingerprint."
+}

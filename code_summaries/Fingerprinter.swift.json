@@ -1,0 +1,5 @@
+{
+  "file_role": "Coordinator",
+  "content_summary": "This file is the main entry point of the FingerprintJS library, providing an interface to all library functions. It acts as a coordinator, orchestrating the interaction between different components such as IdentifierHarvesting, DeviceInfoTreeProvider, and FingerprintTreeCalculator. It provides methods to retrieve a stable device identifier, compute a device fingerprint, and get fingerprint information in its raw form.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by coordinating the collection of device information, computing the fingerprint using a specified hash function, and returning the fingerprint as a string. The fingerprint is computed based on a combination of hardware information and device identifiers."
+}

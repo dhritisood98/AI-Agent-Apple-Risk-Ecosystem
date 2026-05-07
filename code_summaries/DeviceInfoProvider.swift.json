@@ -1,0 +1,5 @@
+{
+  "file_role": "DataProvider",
+  "content_summary": "This file defines a protocol `DeviceInfoProviding` and a class `DeviceInfoProvider` that conforms to this protocol. The class is responsible for gathering and providing device information. It uses various harvester objects to collect different types of device information, such as identifier, app, hardware, OS, and cellular network information. The class provides two methods to retrieve the device information: `getDeviceInfo()` and `getDeviceInfo(_:)`.",
+  "fingerprint_contribution": "This file contributes to the final device fingerprint by providing a comprehensive set of device information, including device identifier, locale, screen resolution, device name, OS version, and more. This information can be used to create a unique fingerprint for the device, allowing for identification and tracking."
+}
